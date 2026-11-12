@@ -1,5 +1,5 @@
 """
-Assetto Corsa Phone Controller — PC Host Server (vJoy edition)
+KyberLink — PC Host Server (vJoy edition)
 ===============================================================
 
 What this does
@@ -8,7 +8,7 @@ What this does
 2. Runs a WebSocket server receiving the phone's 60Hz JSON stream:
        { "Normalized_Steering": -1.0..1.0, "Throttle_State": bool,
          "Brake_State": bool, "Custom_Keys": {"<key name>": bool, ...} }
-3. Feeds a vJoy virtual joystick, which Windows and Assetto Corsa see as a
+3. Feeds a vJoy virtual joystick, which Windows and KyberLink see as a
    real DirectInput controller:
        - Steering     -> vJoy X axis  (absolute position, no mouse involved)
        - Throttle     -> vJoy Y axis  (ramped 0..1)
@@ -466,7 +466,7 @@ async def main():
     local_ip = get_local_ip()
 
     print("=" * 64)
-    print(" Assetto Corsa Phone Controller — vJoy server running")
+    print(" KyberLink — vJoy server running")
     print("=" * 64)
     print(f" 1. On your phone, open:      http://{local_ip}:{HTTP_PORT}/")
     print(f" 2. In the app's connection field, enter:   {local_ip}   port {WS_PORT}")
