@@ -1,0 +1,734 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#0b0d10">
+<title>Phone Wheel — AC Controller</title>
+<style>
+  /* =====================================================
+     TOKENS
+     Asphalt charcoal base, brushed-steel wheel, three
+     functional accents (amber = reference/info, green =
+     throttle, red = brake) instead of one decorative neon.
+     ===================================================== */
+  :root{
+    --bg-0:#0b0d10;
+    --bg-1:#15181c;
+    --bg-2:#1c2026;
+    --line:#2a2e33;
+    --rim-light:#454b53;
+    --rim-dark:#1a1c1f;
+    --amber:#ff6a00;
+    --amber-dim:#5c3414;
+    --green:#1fae5c;
+    --green-glow:#36e08a;
+    --red:#e23a3a;
+    --red-glow:#ff5c5c;
+    --text-0:#eef0f2;
+    --text-1:#8a9099;
+    --mono: ui-monospace, "SF Mono", "Cascadia Code", "Consolas", monospace;
+    --sans: -apple-system, "Segoe UI", "Inter", system-ui, sans-serif;
+  }
+
+  *{ box-sizing:border-box; -webkit-tap-highlight-color:transparent; user-select:none; -webkit-user-select:none; }
+  html,body{ margin:0; padding:0; background:var(--bg-0); color:var(--text-0); font-family:var(--sans); overscroll-behavior:none; }
+  body{ width:100%; height:100%; position:fixed; touch-action:none; }
+
+  /* ---------- Forced-landscape rotation hack ----------
+     Most phones in a browser tab can't be locked to
+     landscape via the Orientation API without an installed
+     PWA in fullscreen, so when the device is held in
+     portrait we rotate the whole app 90° with CSS instead. */
+  #app{
+    width:100vw; height:100vh;
+    display:flex; flex-direction:column;
+    overflow:hidden;
+    position:relative;
+  }
+  @media screen and (orientation:portrait){
+    #app{
+      width:100vh;
+      height:100vw;
+      position:absolute;
+      top:0; left:100%;
+      transform-origin:0 0;
+      transform:rotate(90deg);
+    }
+  }
+
+  /* ---------- Start overlay ---------- */
+  #start-overlay{
+    position:absolute; inset:0; z-index:50;
+    background:radial-gradient(ellipse at 50% 40%, #1a1d22 0%, var(--bg-0) 70%);
+    display:flex; flex-direction:column; align-items:center; justify-content:center; gap:18px;
+  }
+  #start-overlay .mark{
+    font-family:var(--mono); letter-spacing:.35em; font-size:12px; color:var(--text-1);
+  }
+  #start-btn{
+    font-family:var(--sans); font-weight:700; font-size:15px; letter-spacing:.04em;
+    color:var(--bg-0); background:var(--amber); border:none; border-radius:6px;
+    padding:14px 34px; box-shadow:0 0 0 1px var(--amber-dim), 0 8px 24px -8px rgba(255,106,0,.5);
+  }
+  #start-btn:active{ filter:brightness(.9); }
+  #start-overlay .hint{ font-family:var(--mono); font-size:11px; color:var(--text-1); }
+  .hidden{ display:none !important; }
+
+  /* ---------- Status bar ---------- */
+  #status-bar{
+    flex:0 0 auto;
+    height:38px;
+    display:flex; align-items:center; justify-content:space-between;
+    background:var(--bg-1);
+    border-bottom:1px solid var(--line);
+    padding:0 10px;
+    font-family:var(--mono); font-size:11px; letter-spacing:.03em;
+    z-index:10;
+  }
+  #status-left{ display:flex; align-items:center; gap:7px; min-width:0; }
+  #led{ width:7px; height:7px; border-radius:50%; background:var(--red); flex:0 0 auto; box-shadow:0 0 6px var(--red-glow); transition:background .15s, box-shadow .15s; }
+  #led.on{ background:var(--green); box-shadow:0 0 6px var(--green-glow); }
+  #status-text{ color:var(--text-1); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  #telemetry{ color:var(--amber); font-weight:600; white-space:nowrap; }
+  #gear-btn{
+    background:none; border:1px solid var(--line); color:var(--text-1);
+    width:26px; height:26px; border-radius:5px; font-size:13px; line-height:1; flex:0 0 auto;
+  }
+  #gear-btn:active{ border-color:var(--amber); color:var(--amber); }
+
+  /* ---------- Main control surface ---------- */
+  #main{ flex:1 1 auto; display:flex; min-height:0; }
+
+  /* ----- Wheel zone ----- */
+  #wheel-zone{ flex:0 0 42%; display:flex; align-items:center; justify-content:center; position:relative; }
+  #wheel-outer{ position:relative; }
+  #wheel-outer svg{ display:block; }
+  #refmark{ /* fixed straight-ahead reference notch, does not rotate */
+    position:absolute; top:-2px; left:50%; width:4px; height:14px; margin-left:-2px;
+    background:var(--amber); border-radius:2px; box-shadow:0 0 6px rgba(255,106,0,.6);
+    z-index:5;
+  }
+  #wheel-rim{ transform-origin:50% 50%; will-change:transform; touch-action:none; }
+  #hub-readout{
+    position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);
+    display:flex; flex-direction:column; align-items:center; pointer-events:none;
+  }
+  #hub-angle{ font-family:var(--mono); font-size:22px; font-weight:700; color:var(--text-0); letter-spacing:.02em; }
+  #hub-turns{ font-family:var(--mono); font-size:10px; color:var(--text-1); margin-top:2px; letter-spacing:.05em; }
+
+  /* ----- Pedal zone: custom buttons on top, pedals below ----- */
+  #pedal-zone{ flex:1 1 auto; display:flex; flex-direction:column; min-height:0; }
+
+  #custom-buttons-row{
+    flex:0 0 40%;
+    display:grid; grid-template-columns:repeat(3,1fr); grid-template-rows:repeat(2,1fr);
+    gap:1px; background:var(--line); border-bottom:1px solid var(--line);
+  }
+  .custom-btn{
+    position:relative; appearance:none; border:none; outline:none;
+    background:var(--bg-1); color:var(--text-1);
+    display:flex; flex-direction:column; align-items:center; justify-content:center; gap:3px;
+    font-family:var(--sans);
+  }
+  .custom-btn .glyph{
+    font-family:var(--mono); font-size:10px; letter-spacing:.06em; opacity:.65;
+  }
+  .custom-btn .label{
+    font-weight:700; font-size:11px; letter-spacing:.07em; text-align:center;
+    padding:0 4px; line-height:1.25;
+  }
+  .custom-btn.active{
+    background:rgba(255,106,0,.16); color:var(--amber); transform:scale(.96);
+    box-shadow:inset 0 0 0 1px var(--amber);
+  }
+
+  #pedals-row{ flex:1 1 auto; display:flex; min-height:0; }
+  .pedal{
+    flex:1 1 50%;
+    position:relative;
+    display:flex; flex-direction:column; align-items:center; justify-content:flex-end;
+    overflow:hidden;
+    background:var(--bg-1);
+    border-left:1px solid var(--line);
+  }
+  .pedal:first-child{ border-left:none; }
+  .pedal .fill{
+    position:absolute; left:0; right:0; bottom:0; height:0%;
+  }
+  #brake .fill{ background:linear-gradient(180deg, var(--red-glow), var(--red) 70%); }
+  #throttle .fill{ background:linear-gradient(180deg, var(--green-glow), var(--green) 70%); }
+  .pedal .label{
+    position:relative; z-index:2;
+    font-family:var(--sans); font-weight:700; font-size:13px; letter-spacing:.1em;
+    color:var(--text-1); margin-bottom:10px;
+  }
+  .pedal .glyph{
+    position:relative; z-index:2; margin-bottom:5px;
+    font-family:var(--mono); font-size:10px; color:var(--text-1); opacity:.6;
+  }
+  .pedal.active{ transform:scale(.985); }
+  .pedal.active .label{ color:var(--bg-0); }
+  #brake.active{ box-shadow:inset 0 0 40px rgba(226,58,58,.25); }
+  #throttle.active{ box-shadow:inset 0 0 40px rgba(31,174,92,.25); }
+
+  /* ---------- Settings drawer ---------- */
+  #drawer-backdrop{
+    position:absolute; inset:0; background:rgba(0,0,0,.55); z-index:30;
+  }
+  #drawer{
+    position:absolute; top:0; left:0; right:0; z-index:31;
+    background:var(--bg-1); border-bottom:1px solid var(--line);
+    padding:14px 16px 18px; max-height:100%; overflow-y:auto;
+  }
+  .drawer-row{ margin-bottom:16px; }
+  .drawer-row:last-child{ margin-bottom:0; }
+  .drawer-label{ font-family:var(--mono); font-size:10px; letter-spacing:.12em; color:var(--text-1); margin-bottom:8px; display:block; text-transform:uppercase; }
+  .preset-row{ display:flex; gap:6px; margin-bottom:8px; }
+  .preset-btn{
+    flex:1; background:var(--bg-2); border:1px solid var(--line); color:var(--text-0);
+    font-family:var(--mono); font-size:12px; padding:8px 0; border-radius:5px;
+  }
+  .preset-btn.selected{ border-color:var(--amber); color:var(--amber); background:rgba(255,106,0,.08); }
+  #angle-slider{ width:100%; accent-color:var(--amber); }
+  #angle-readout{ font-family:var(--mono); font-size:12px; color:var(--amber); text-align:right; }
+  .conn-row{ display:flex; gap:6px; }
+  .conn-row input{
+    flex:1; min-width:0; background:var(--bg-2); border:1px solid var(--line); color:var(--text-0);
+    font-family:var(--mono); font-size:13px; padding:9px 8px; border-radius:5px;
+  }
+  .conn-row input:focus{ outline:none; border-color:var(--amber); }
+  #connect-btn{
+    background:var(--amber); border:none; color:var(--bg-0); font-weight:700;
+    font-size:12px; letter-spacing:.04em; padding:0 16px; border-radius:5px;
+  }
+  #connect-btn:active{ filter:brightness(.9); }
+  .hint-text{ font-family:var(--mono); font-size:10px; color:var(--text-1); margin-top:6px; line-height:1.5; }
+
+  .custom-cfg-row{ display:flex; gap:6px; margin-bottom:7px; align-items:center; }
+  .custom-cfg-row .cfg-num{
+    font-family:var(--mono); font-size:11px; color:var(--text-1); width:14px; flex:0 0 auto;
+  }
+  .custom-cfg-row input{
+    background:var(--bg-2); border:1px solid var(--line); color:var(--text-0);
+    font-family:var(--mono); font-size:12px; padding:8px 8px; border-radius:5px; min-width:0;
+  }
+  .custom-cfg-row input:focus{ outline:none; border-color:var(--amber); }
+  .custom-cfg-row .cfg-label{ flex:1 1 auto; }
+  .custom-cfg-row .cfg-key{ flex:0 0 64px; text-align:center; text-transform:lowercase; }
+
+  #close-drawer{
+    width:100%; margin-top:18px; background:none; border:1px solid var(--line); color:var(--text-1);
+    font-family:var(--sans); font-weight:600; font-size:12px; letter-spacing:.06em; padding:10px 0; border-radius:5px;
+  }
+</style>
+</head>
+<body>
+<div id="app">
+
+  <!-- Tap-to-start gate: lets us request fullscreen / orientation-lock
+       from a real user gesture, and attempt a haptic test. -->
+  <div id="start-overlay">
+    <div class="mark">PHONE&nbsp;WHEEL</div>
+    <button id="start-btn">ENTER COCKPIT</button>
+    <div class="hint">Rotate your phone to landscape before tapping</div>
+  </div>
+
+  <div id="status-bar">
+    <div id="status-left">
+      <div id="led"></div>
+      <span id="status-text">offline</span>
+    </div>
+    <div id="telemetry">0.00</div>
+    <button id="gear-btn">⚙</button>
+  </div>
+
+  <div id="main">
+    <div id="wheel-zone">
+      <div id="wheel-outer">
+        <div id="refmark"></div>
+        <svg id="wheel-rim" width="260" height="260" viewBox="0 0 260 260">
+          <defs>
+            <radialGradient id="rimGrad" cx="40%" cy="35%" r="75%">
+              <stop offset="0%" stop-color="#5a616a"/>
+              <stop offset="55%" stop-color="#33373d"/>
+              <stop offset="100%" stop-color="#161819"/>
+            </radialGradient>
+            <linearGradient id="hubGrad" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0%" stop-color="#3a3f46"/>
+              <stop offset="100%" stop-color="#1a1c1f"/>
+            </linearGradient>
+          </defs>
+          <circle cx="130" cy="130" r="124" fill="url(#rimGrad)" stroke="#0e0f10" stroke-width="2"/>
+          <circle cx="130" cy="130" r="98" fill="var(--bg-0)"/>
+          <g id="ticks"></g>
+          <!-- spokes -->
+          <path d="M 130 130 L 60 168 M 130 130 L 200 168 M 130 130 L 130 60" stroke="#2c3036" stroke-width="14" stroke-linecap="round"/>
+          <path d="M 130 130 L 60 168 M 130 130 L 200 168 M 130 130 L 130 60" stroke="#454b53" stroke-width="14" stroke-linecap="round" opacity="0.35" transform="translate(-2,-2)"/>
+          <circle cx="130" cy="130" r="46" fill="url(#hubGrad)" stroke="#0e0f10" stroke-width="2"/>
+          <circle cx="130" cy="130" r="3" fill="var(--amber)"/>
+        </svg>
+        <div id="hub-readout">
+          <div id="hub-angle">0°</div>
+          <div id="hub-turns">0.00 TURNS</div>
+        </div>
+      </div>
+    </div>
+
+    <div id="pedal-zone">
+      <div id="custom-buttons-row">
+        <button class="custom-btn" data-index="0"><span class="glyph">[E]</span><span class="label">GEAR UP</span></button>
+        <button class="custom-btn" data-index="1"><span class="glyph">[Q]</span><span class="label">GEAR DOWN</span></button>
+        <button class="custom-btn" data-index="2"><span class="glyph">[SPACE]</span><span class="label">HANDBRAKE</span></button>
+        <button class="custom-btn" data-index="3"><span class="glyph">[L]</span><span class="label">LIGHTS</span></button>
+        <button class="custom-btn" data-index="4"><span class="glyph">[I]</span><span class="label">LIMITER</span></button>
+        <button class="custom-btn" data-index="5"><span class="glyph">[K]</span><span class="label">LOOK BACK</span></button>
+      </div>
+      <div id="pedals-row">
+        <div class="pedal" id="brake">
+          <div class="fill"></div>
+          <div class="glyph">RMB</div>
+          <div class="label">BRAKE</div>
+        </div>
+        <div class="pedal" id="throttle">
+          <div class="fill"></div>
+          <div class="glyph">LMB</div>
+          <div class="label">THROTTLE</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Settings drawer -->
+  <div id="drawer-backdrop" class="hidden"></div>
+  <div id="drawer" class="hidden">
+    <div class="drawer-row">
+      <span class="drawer-label">Max steering angle (lock-to-lock)</span>
+      <div class="preset-row" id="preset-row">
+        <button class="preset-btn" data-angle="360">360°</button>
+        <button class="preset-btn" data-angle="540">540°</button>
+        <button class="preset-btn selected" data-angle="900">900°</button>
+        <button class="preset-btn" data-angle="1080">1080°</button>
+      </div>
+      <input type="range" id="angle-slider" min="90" max="1800" step="10" value="900">
+      <div id="angle-readout">900°</div>
+    </div>
+
+    <div class="drawer-row">
+      <span class="drawer-label">PC server address</span>
+      <div class="conn-row">
+        <input type="text" id="host-input" placeholder="192.168.1.50" autocomplete="off" autocapitalize="off" spellcheck="false">
+        <input type="text" id="port-input" placeholder="8765" autocomplete="off" style="flex:0 0 70px;">
+        <button id="connect-btn">CONNECT</button>
+      </div>
+      <div class="hint-text">Find this on the PC: run server.py and copy the IP:port it prints.<br>Tip: bookmark this page as <span style="color:var(--amber)">?host=IP&amp;port=8765</span> to skip retyping it next time — add <span style="color:var(--amber)">&amp;c1l=LABEL&amp;c1k=key</span> (through c6) to also save your custom button setup.</div>
+    </div>
+
+    <div class="drawer-row">
+      <span class="drawer-label">Custom buttons (label / PC key)</span>
+      <div id="custom-cfg-list"></div>
+      <div class="hint-text">Key field accepts a single character (e, q, 1, ...) or a name:
+        space, shift, ctrl, alt, enter, tab, esc, up, down, left, right, f1–f12,
+        backspace, delete, capslock.</div>
+    </div>
+
+    <button id="close-drawer">DONE</button>
+  </div>
+
+</div>
+
+<script>
+(function(){
+  "use strict";
+
+  /* ---------------- state ---------------- */
+  const state = {
+    maxAngle: 900,
+    halfRange: 450,
+    rotation: 0,          // accumulated degrees, unwrapped (supports multi-turn)
+    dragging: false,
+    pointerId: null,
+    centerX: 0, centerY: 0,
+    lastPointerAngle: 0,
+    returnRaf: null,
+    throttle: false,
+    brake: false,
+    ws: null,
+    wsConnected: false,
+    reconnectUrl: null,
+    reconnectTimer: null,
+    customButtons: [
+      { label: "GEAR UP",    key: "e",     pressed: false },
+      { label: "GEAR DOWN",  key: "q",     pressed: false },
+      { label: "HANDBRAKE",  key: "space", pressed: false },
+      { label: "LIGHTS",     key: "l",     pressed: false },
+      { label: "LIMITER",    key: "i",     pressed: false },
+      { label: "LOOK BACK",  key: "k",     pressed: false },
+    ],
+  };
+
+  /* ---------------- dom refs ---------------- */
+  const $ = (id) => document.getElementById(id);
+  const wheelRim   = $("wheel-rim");
+  const hubAngle   = $("hub-angle");
+  const hubTurns   = $("hub-turns");
+  const telemetry  = $("telemetry");
+  const led        = $("led");
+  const statusText = $("status-text");
+  const brakeEl    = $("brake");
+  const throttleEl = $("throttle");
+  const brakeFill    = brakeEl.querySelector(".fill");
+  const throttleFill = throttleEl.querySelector(".fill");
+  const customBtnEls = [...document.querySelectorAll(".custom-btn")];
+
+  /* ---------------- helpers ---------------- */
+  function vibrate(ms){ try{ if(navigator.vibrate) navigator.vibrate(ms); }catch(e){} }
+  function clamp(v,lo,hi){ return Math.max(lo, Math.min(hi, v)); }
+
+
+  /* ---------------- responsive wheel sizing ----------------
+     clientWidth/clientHeight reflect real pre-transform layout
+     (CSS transforms don't affect layout boxes), so this works
+     correctly whether or not the portrait rotation hack is active. */
+  const wheelZone = $("wheel-zone"), wheelOuter = $("wheel-outer");
+  function sizeWheel(){
+    const w = wheelZone.clientWidth, h = wheelZone.clientHeight;
+    if(w < 10 || h < 10) return;
+    const size = Math.floor(Math.min(w, h) * 0.86);
+    wheelOuter.style.width = size + "px";
+    wheelOuter.style.height = size + "px";
+    wheelRim.setAttribute("width", size);
+    wheelRim.setAttribute("height", size);
+  }
+  window.addEventListener("resize", sizeWheel);
+  window.addEventListener("orientationchange", ()=>setTimeout(sizeWheel, 60));
+  sizeWheel();
+
+  /* ---------------- wheel tick marks (drawn once) ---------------- */
+  (function drawTicks(){
+    const g = document.getElementById("ticks");
+    const cx=130, cy=130, rOuter=98, rInner=88;
+    let html = "";
+    for(let deg=0; deg<360; deg+=15){
+      const rad = deg*Math.PI/180;
+      const major = deg % 90 === 0;
+      const rI = major ? rInner-8 : rInner;
+      const x1 = cx + rI*Math.sin(rad), y1 = cy - rI*Math.cos(rad);
+      const x2 = cx + rOuter*Math.sin(rad), y2 = cy - rOuter*Math.cos(rad);
+      html += `<line x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}" stroke="${major?'#ff6a00':'#454b53'}" stroke-width="${major?2.5:1.5}" opacity="${major?0.9:0.45}"/>`;
+    }
+    g.innerHTML = html;
+  })();
+
+  /* ====================================================
+     STEERING WHEEL — multi-turn drag with auto-centering
+     ==================================================== */
+  function angleFromCenter(x,y){
+    return Math.atan2(x-state.centerX, -(y-state.centerY)) * 180/Math.PI;
+  }
+
+  function cancelReturn(){
+    if(state.returnRaf){ cancelAnimationFrame(state.returnRaf); state.returnRaf = null; }
+  }
+
+  function updateWheelVisual(){
+    wheelRim.style.transform = `rotate(${state.rotation}deg)`;
+    hubAngle.textContent = `${Math.round(state.rotation)}°`;
+    hubTurns.textContent = `${(state.rotation/360).toFixed(2)} TURNS`;
+    const normalized = state.rotation / state.halfRange;
+    telemetry.textContent = normalized.toFixed(2);
+    state.normalized = clamp(normalized, -1, 1);
+  }
+
+  function animateReturnToCenter(){
+    cancelReturn();
+    const startRot = state.rotation;
+    const startTime = performance.now();
+    const duration = 220; // ms — snappy spring-back, not floaty
+    function step(now){
+      const t = clamp((now-startTime)/duration, 0, 1);
+      const eased = 1 - Math.pow(1-t, 3); // ease-out cubic
+      state.rotation = startRot * (1-eased);
+      updateWheelVisual();
+      if(t < 1){ state.returnRaf = requestAnimationFrame(step); }
+      else { state.rotation = 0; updateWheelVisual(); state.returnRaf = null; }
+    }
+    state.returnRaf = requestAnimationFrame(step);
+  }
+
+  wheelRim.addEventListener("pointerdown", (e)=>{
+    if(state.dragging) return;
+    state.dragging = true;
+    state.pointerId = e.pointerId;
+    try{ wheelRim.setPointerCapture(e.pointerId); }catch(err){}
+    cancelReturn();
+    const rect = wheelRim.getBoundingClientRect();
+    state.centerX = rect.left + rect.width/2;
+    state.centerY = rect.top + rect.height/2;
+    state.lastPointerAngle = angleFromCenter(e.clientX, e.clientY);
+    e.preventDefault();
+  });
+
+  wheelRim.addEventListener("pointermove", (e)=>{
+    if(!state.dragging || e.pointerId !== state.pointerId) return;
+    const cur = angleFromCenter(e.clientX, e.clientY);
+    let delta = cur - state.lastPointerAngle;
+    if(delta > 180) delta -= 360;
+    if(delta < -180) delta += 360;
+    state.rotation = clamp(state.rotation + delta, -state.halfRange, state.halfRange);
+    state.lastPointerAngle = cur;
+    updateWheelVisual();
+  });
+
+  function endDrag(e){
+    if(!state.dragging || e.pointerId !== state.pointerId) return;
+    state.dragging = false;
+    state.pointerId = null;
+    animateReturnToCenter();
+  }
+  wheelRim.addEventListener("pointerup", endDrag);
+  wheelRim.addEventListener("pointercancel", endDrag);
+  wheelRim.addEventListener("lostpointercapture", ()=>{
+    if(state.dragging){ state.dragging = false; state.pointerId = null; animateReturnToCenter(); }
+  });
+
+  function setMaxAngle(angle){
+    state.maxAngle = angle;
+    state.halfRange = angle/2;
+    state.rotation = clamp(state.rotation, -state.halfRange, state.halfRange);
+    updateWheelVisual();
+  }
+
+  /* ====================================================
+     PEDALS — boolean hold buttons, pointer-capture based
+     so a finger drifting slightly off the button edge
+     doesn't release it early.
+     ==================================================== */
+  function setupPedal(el, fillEl, key){
+    let pid = null;
+    function press(e){
+      if(pid !== null) return;
+      pid = e.pointerId;
+      try{ el.setPointerCapture(pid); }catch(err){}
+      state[key] = true;
+      el.classList.add("active");
+      fillEl.style.height = "100%";
+      vibrate(10);
+      sendState();
+      e.preventDefault();
+    }
+    function release(e){
+      if(e.pointerId !== pid) return;
+      pid = null;
+      state[key] = false;
+      el.classList.remove("active");
+      fillEl.style.height = "0%";
+      sendState();
+    }
+    el.addEventListener("pointerdown", press);
+    el.addEventListener("pointerup", release);
+    el.addEventListener("pointercancel", release);
+    el.addEventListener("lostpointercapture", (e)=>{ if(pid!==null){ pid=null; state[key]=false; el.classList.remove("active"); fillEl.style.height="0%"; sendState(); } });
+  }
+  setupPedal(brakeEl, brakeFill, "brake");
+  setupPedal(throttleEl, throttleFill, "throttle");
+
+  /* ====================================================
+     CUSTOM BUTTONS — 6 user-relabelable, user-rebindable
+     buttons that send PC keyboard keys (not mouse clicks).
+     Same pointer-capture-based hold pattern as the pedals.
+     ==================================================== */
+  function renderCustomButton(i){
+    const cfg = state.customButtons[i];
+    const el = customBtnEls[i];
+    el.querySelector(".label").textContent = cfg.label || `BUTTON ${i+1}`;
+    el.querySelector(".glyph").textContent = cfg.key ? `[${cfg.key.toUpperCase()}]` : "[—]";
+  }
+  function renderAllCustomButtons(){
+    state.customButtons.forEach((_, i)=>renderCustomButton(i));
+  }
+
+  function setupCustomButton(el, index){
+    let pid = null;
+    function press(e){
+      if(pid !== null) return;
+      pid = e.pointerId;
+      try{ el.setPointerCapture(pid); }catch(err){}
+      state.customButtons[index].pressed = true;
+      el.classList.add("active");
+      vibrate(10);
+      sendState();
+      e.preventDefault();
+    }
+    function release(e){
+      if(e.pointerId !== pid) return;
+      pid = null;
+      state.customButtons[index].pressed = false;
+      el.classList.remove("active");
+      sendState();
+    }
+    el.addEventListener("pointerdown", press);
+    el.addEventListener("pointerup", release);
+    el.addEventListener("pointercancel", release);
+    el.addEventListener("lostpointercapture", ()=>{ if(pid!==null){ pid=null; state.customButtons[index].pressed=false; el.classList.remove("active"); sendState(); } });
+  }
+  customBtnEls.forEach((el, i)=>setupCustomButton(el, i));
+  renderAllCustomButtons();
+
+  /* ---- drawer config rows for the 6 custom buttons ---- */
+  function buildCustomConfigUI(){
+    const list = $("custom-cfg-list");
+    list.innerHTML = "";
+    state.customButtons.forEach((cfg, i)=>{
+      const row = document.createElement("div");
+      row.className = "custom-cfg-row";
+      row.innerHTML = `
+        <span class="cfg-num">${i+1}</span>
+        <input class="cfg-label" type="text" maxlength="14" autocomplete="off" value="${cfg.label.replace(/"/g,'&quot;')}">
+        <input class="cfg-key" type="text" maxlength="10" autocomplete="off" autocapitalize="off" spellcheck="false" value="${cfg.key.replace(/"/g,'&quot;')}">
+      `;
+      const labelInput = row.querySelector(".cfg-label");
+      const keyInput = row.querySelector(".cfg-key");
+      labelInput.addEventListener("input", ()=>{
+        cfg.label = labelInput.value.trim().toUpperCase().slice(0,14);
+        renderCustomButton(i);
+      });
+      keyInput.addEventListener("input", ()=>{
+        cfg.key = keyInput.value.trim().toLowerCase().slice(0,10);
+        renderCustomButton(i);
+      });
+      list.appendChild(row);
+    });
+  }
+  buildCustomConfigUI();
+
+  /* ====================================================
+     WEBSOCKET — connect + 60Hz send loop + auto-reconnect
+     ==================================================== */
+  function setConnUI(connected){
+    state.wsConnected = connected;
+    led.classList.toggle("on", connected);
+    statusText.textContent = connected ? "connected" : "offline";
+  }
+
+  function connectWS(url){
+    if(state.ws){ try{ state.ws.close(); }catch(e){} }
+    if(state.reconnectTimer){ clearTimeout(state.reconnectTimer); state.reconnectTimer = null; }
+    state.reconnectUrl = url;
+    let ws;
+    try{ ws = new WebSocket(url); }
+    catch(err){ setConnUI(false); statusText.textContent = "bad address"; return; }
+    state.ws = ws;
+    statusText.textContent = "connecting…";
+    ws.onopen = ()=>{ setConnUI(true); };
+    ws.onclose = ()=>{ setConnUI(false); scheduleReconnect(); };
+    ws.onerror = ()=>{ /* onclose fires right after */ };
+  }
+
+  function scheduleReconnect(){
+    if(state.reconnectTimer) return;
+    state.reconnectTimer = setTimeout(()=>{
+      state.reconnectTimer = null;
+      if(!state.wsConnected && state.reconnectUrl) connectWS(state.reconnectUrl);
+    }, 2000);
+  }
+
+  /* Builds and sends one telemetry packet right now. Called on a steady
+     60Hz interval for the continuous steering signal, AND immediately
+     from every pedal/button press or release — discrete on/off changes
+     don't need to wait for the next scheduled tick (up to ~16ms) before
+     reaching the PC, so this shaves that off for a snappier feel. */
+  function sendState(){
+    if(state.ws && state.ws.readyState === WebSocket.OPEN){
+      const customKeys = {};
+      state.customButtons.forEach(cfg=>{ if(cfg.key) customKeys[cfg.key] = !!cfg.pressed; });
+      const payload = JSON.stringify({
+        Normalized_Steering: Math.round((state.normalized||0)*1000)/1000,
+        Throttle_State: !!state.throttle,
+        Brake_State: !!state.brake,
+        Custom_Keys: customKeys
+      });
+      try{ state.ws.send(payload); }catch(e){}
+    }
+  }
+
+  setInterval(sendState, 1000/60);
+
+  /* ====================================================
+     SETTINGS DRAWER
+     ==================================================== */
+  const drawer = $("drawer"), backdrop = $("drawer-backdrop");
+  function openDrawer(){ drawer.classList.remove("hidden"); backdrop.classList.remove("hidden"); }
+  function closeDrawer(){ drawer.classList.add("hidden"); backdrop.classList.add("hidden"); }
+  $("gear-btn").addEventListener("click", openDrawer);
+  $("close-drawer").addEventListener("click", closeDrawer);
+  backdrop.addEventListener("click", closeDrawer);
+
+  const presetRow = $("preset-row"), slider = $("angle-slider"), readout = $("angle-readout");
+  presetRow.addEventListener("click", (e)=>{
+    const btn = e.target.closest(".preset-btn");
+    if(!btn) return;
+    const angle = parseInt(btn.dataset.angle, 10);
+    slider.value = angle;
+    readout.textContent = angle + "°";
+    [...presetRow.children].forEach(b=>b.classList.toggle("selected", b===btn));
+    setMaxAngle(angle);
+  });
+  slider.addEventListener("input", ()=>{
+    const angle = parseInt(slider.value, 10);
+    readout.textContent = angle + "°";
+    [...presetRow.children].forEach(b=>b.classList.toggle("selected", parseInt(b.dataset.angle,10)===angle));
+    setMaxAngle(angle);
+  });
+
+  $("connect-btn").addEventListener("click", ()=>{
+    const host = $("host-input").value.trim();
+    const port = $("port-input").value.trim() || "8765";
+    if(!host) return;
+    connectWS(`ws://${host}:${port}`);
+  });
+
+  /* ---- prefill from URL query string so the page can be bookmarked ---- */
+  (function prefillFromQuery(){
+    const params = new URLSearchParams(window.location.search);
+    const host = params.get("host");
+    const port = params.get("port") || "8765";
+    const angle = parseInt(params.get("maxAngle"), 10);
+    $("port-input").value = port;
+    if(host){ $("host-input").value = host; }
+    if(!isNaN(angle) && angle >= 90 && angle <= 1800){
+      slider.value = angle; readout.textContent = angle + "°";
+      [...presetRow.children].forEach(b=>b.classList.toggle("selected", parseInt(b.dataset.angle,10)===angle));
+      setMaxAngle(angle);
+    }
+    let customChanged = false;
+    state.customButtons.forEach((cfg, i)=>{
+      const n = i+1;
+      const l = params.get(`c${n}l`), k = params.get(`c${n}k`);
+      if(l !== null){ cfg.label = l.trim().toUpperCase().slice(0,14); customChanged = true; }
+      if(k !== null){ cfg.key = k.trim().toLowerCase().slice(0,10); customChanged = true; }
+    });
+    if(customChanged){ renderAllCustomButtons(); buildCustomConfigUI(); }
+    if(host){ connectWS(`ws://${host}:${port}`); }
+  })();
+
+  /* ====================================================
+     START OVERLAY — user gesture unlocks fullscreen /
+     orientation-lock attempts (best-effort, silently
+     ignored on browsers that don't support them; the CSS
+     rotation hack above is the real fallback).
+     ==================================================== */
+  $("start-btn").addEventListener("click", ()=>{
+    try{ document.documentElement.requestFullscreen && document.documentElement.requestFullscreen(); }catch(e){}
+    try{ screen.orientation && screen.orientation.lock && screen.orientation.lock("landscape").catch(()=>{}); }catch(e){}
+    $("start-overlay").classList.add("hidden");
+    vibrate(15);
+    setTimeout(sizeWheel, 80);
+  });
+
+  /* initial paint */
+  updateWheelVisual();
+})();
+</script>
+</body>
+</html>
