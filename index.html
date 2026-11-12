@@ -91,6 +91,12 @@
   #led.on{ background:var(--green); box-shadow:0 0 6px var(--green-glow); }
   #status-text{ color:var(--text-1); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   #telemetry{ color:var(--amber); font-weight:600; white-space:nowrap; }
+  #status-right{ display:flex; align-items:center; gap:6px; }
+  #fullscreen-btn{
+    background:none; border:1px solid var(--line); color:var(--text-1);
+    width:26px; height:26px; border-radius:5px; font-size:13px; line-height:1; flex:0 0 auto;
+  }
+  #fullscreen-btn:active{ border-color:var(--amber); color:var(--amber); }
   #gear-btn{
     background:none; border:1px solid var(--line); color:var(--text-1);
     width:26px; height:26px; border-radius:5px; font-size:13px; line-height:1; flex:0 0 auto;
@@ -240,7 +246,10 @@
       <span id="status-text">offline</span>
     </div>
     <div id="telemetry">0.00</div>
-    <button id="gear-btn">⚙</button>
+    <div id="status-right">
+      <button id="fullscreen-btn">⛶</button>
+      <button id="gear-btn">⚙</button>
+    </div>
   </div>
 
   <div id="main">
@@ -724,6 +733,14 @@
     $("start-overlay").classList.add("hidden");
     vibrate(15);
     setTimeout(sizeWheel, 80);
+  });
+
+  $("fullscreen-btn").addEventListener("click", ()=>{
+    if (!document.fullscreenElement) {
+      document.documentElement.requestFullscreen().catch(e => console.error(e));
+    } else {
+      document.exitFullscreen();
+    }
   });
 
   /* initial paint */
