@@ -212,9 +212,9 @@ vjoy: "VJoy | None" = None
 class ControllerState:
     def __init__(self):
         self.steering = 0.0         # latest target from the phone (-1..1)
-        self.throttle = False       # latest requested pedal states
-        self.brake = False
-        self.clutch = False
+        self.throttle = 0.0           # latest requested pedal state (0..1)
+        self.brake = 0.0            # latest requested pedal state (0..1)
+        self.clutch = 0.0            # latest requested pedal state (0..1)
         self.custom_key_states = {}
         self.last_update = 0.0
         self.connected_addr = None
@@ -284,9 +284,9 @@ async def output_loop():
                 controller.out_steer = approach(controller.out_steer, 0.0, rate, rate, dt)
 
             # --- pedals ---
-            thr_target = THROTTLE_MAX if (live and controller.throttle) else 0.0
-            brk_target = BRAKE_MAX if (live and controller.brake) else 0.0
-            clt_target = CLUTCH_MAX if (live and controller.clutch) else 0.0
+            thr_target = (THROTTLE_MAX * controller.throttle) if live else 0.0
+            brk_target = (BRAKE_MAX * controller.brake) if live else 0.0
+            clt_target = (CLUTCH_MAX * controller.clutch) if live else 0.0
             
             controller.out_throttle = approach(controller.out_throttle, thr_target, THROTTLE_RISE, THROTTLE_FALL, dt)
             controller.out_brake = approach(controller.out_brake, brk_target, BRAKE_RISE, BRAKE_FALL, dt)
@@ -401,9 +401,9 @@ async def handle_client(websocket):
                 custom_keys = {}
 
             controller.steering = steer
-            controller.throttle = bool(data.get("Throttle_State", False))
-            controller.brake = bool(data.get("Brake_State", False))
-            controller.clutch = bool(data.get("Clutch_State", False))
+            controller.throttle = float(data.get("Throttle_Value", 1.0 if data.get("Throttle_State", False) else 0.0))
+            controller.brake = float(data.get("Brake_Value", 1.0 if data.get("Brake_State", False) else 0.0))
+            controller.clutch = float(data.get("Clutch_Value", 1.0 if data.get("Clutch_State", False) else 0.0))
             controller.connected_addr = addr
             controller.last_update = time.time()
 

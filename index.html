@@ -38,11 +38,7 @@
   html,body{ margin:0; padding:0; background:var(--bg-0); color:var(--text-0); font-family:var(--sans); overscroll-behavior:none; }
   body{ width:100%; height:100%; position:fixed; touch-action:none; }
 
-  /* ---------- Forced-landscape rotation hack ----------
-     Most phones in a browser tab can't be locked to
-     landscape via the Orientation API without an installed
-     PWA in fullscreen, so when the device is held in
-     portrait we rotate the whole app 90° with CSS instead. */
+  /* ---------- Forced-landscape rotation hack ---------- */
   #app{
     width:100vw; height:100vh;
     display:flex; flex-direction:column;
@@ -228,6 +224,18 @@
   .custom-cfg-row .cfg-label{ flex:1 1 auto; }
   .custom-cfg-row .cfg-key{ flex:0 0 64px; text-align:center; text-transform:lowercase; }
 
+  .mode-toggle-row{
+    display:flex; align-items:center; justify-content:space-between;
+    background:var(--bg-2); border-radius:5px; padding:6px 8px; margin-bottom:6px;
+  }
+  .mode-toggle-row .mode-label{ font-family:var(--mono); font-size:12px; color:var(--text-0); }
+  .mode-toggle-group{ display:flex; gap:2px; background:var(--bg-0); padding:2px; border-radius:4px; }
+  .mode-toggle-btn{
+    flex:1; border:none; background:none; color:var(--text-1);
+    font-family:var(--mono); font-size:10px; padding:4px 8px; border-radius:3px; cursor:pointer;
+  }
+  .mode-toggle-btn.selected{ background:var(--bg-1); color:var(--amber); box-shadow:0 0 0 1px var(--amber-dim); }
+
   #close-drawer{
     width:100%; margin-top:18px; background:none; border:1px solid var(--line); color:var(--text-1);
     font-family:var(--sans); font-weight:600; font-size:12px; letter-spacing:.06em; padding:10px 0; border-radius:5px;
@@ -322,6 +330,11 @@
   <div id="drawer-backdrop" class="hidden"></div>
   <div id="drawer" class="hidden">
     <div class="drawer-row">
+      <span class="drawer-label">Pedal modes</span>
+      <div id="pedal-modes-container"></div>
+    </div>
+
+    <div class="drawer-row">
       <span class="drawer-label">Max steering angle (lock-to-lock)</span>
       <div class="preset-row" id="preset-row">
         <button class="preset-btn" data-angle="360">360°</button>
@@ -370,9 +383,12 @@
     centerX: 0, centerY: 0,
     lastPointerAngle: 0,
     returnRaf: null,
-    throttle: false,
-    brake: false,
-    clutch: false,
+    throttle: 0,
+    brake: 0,
+    clutch: 0,
+    throttleMode: 'click', // 'click' or 'slide'
+    brakeMode: 'click',
+    clutchMode: 'click',
     ws: null,
     wsConnected: false,
     reconnectUrl: null,
@@ -526,35 +542,123 @@
      so a finger drifting slightly off the button edge
      doesn't release it early.
      ==================================================== */
-  function setupPedal(el, fillEl, key){
+  function animateValue(el, start, end, duration, callback){
+    let startTime = null;
+    function step(timestamp) {
+      if (!startTime) startTime = timestamp;
+      const progress = Math.min((timestamp - startTime) / duration, 1);
+      const easedProgress = 1 - Math.pow(1 - progress, 3); // easeOutCubic
+      const currentValue = start + (end - start) * easedProgress;
+      el.style.height = (currentValue * 100) + "%";
+      if (callback) callback(currentValue);
+      if (progress < 1) {
+        requestAnimationFrame(step);
+      }
+    }
+    requestAnimationFrame(step);
+  }
+
+  function setupPedal(el, fillEl, key, modeKey){
     let pid = null;
+    let currentVal = 0;
+    let targetVal = 0;
+    let animationFrame = null;
+
+    function updateLoop(){
+      if(currentVal !== targetVal){
+        // Smoothly approach targetVal
+        const diff = targetVal - currentVal;
+        if(Math.abs(diff) < 0.001){
+          currentVal = targetVal;
+          fillEl.style.height = (currentVal * 100) + "%";
+        } else {
+          currentVal += diff * 0.2; // simple smoothing
+          fillEl.style.height = (currentVal * 100) + "%";
+        }
+      }
+      if(animationFrame){
+        animationFrame = requestAnimationFrame(updateLoop);
+      }
+    }
+
+    function startUpdateLoop(){
+      if(!animationFrame){
+        animationFrame = requestAnimationFrame(updateLoop);
+      }
+    }
+
+    function stopUpdateLoop(){
+      cancelAnimationFrame(animationFrame);
+      animationFrame = null;
+    }
+
+    function getPosValue(e){
+      const rect = el.getBoundingClientRect();
+      // Y is from top, we want value from bottom.
+      // bottom = 0, top = 1
+      return 1.0 - ((e.clientY - rect.top) / rect.height);
+    }
+
     function press(e){
       if(pid !== null) return;
       pid = e.pointerId;
       try{ el.setPointerCapture(pid); }catch(err){}
-      state[key] = true;
+      
+      const mode = state[modeKey];
+      if(mode === 'click'){
+        targetVal = 1.0;
+      } else {
+        targetVal = getPosValue(e);
+      }
+      
+      startUpdateLoop();
+      
+      // For 'click' mode, we also set the boolean state for backward compatibility if needed,
+      // but we are moving to values.
+      state[key] = targetVal; 
+      
       el.classList.add("active");
-      fillEl.style.height = "100%";
       vibrate(10);
       sendState();
       e.preventDefault();
     }
+
+    function move(e){
+      if(pid !== null && e.pointerId === pid && state[modeKey] === 'slide'){
+        targetVal = getPosValue(e);
+        state[key] = targetVal;
+        sendState();
+      }
+    }
+
     function release(e){
       if(e.pointerId !== pid) return;
       pid = null;
-      state[key] = false;
+      targetVal = 0;
+      state[key] = 0;
       el.classList.remove("active");
-      fillEl.style.height = "0%";
       sendState();
+      // The updateLoop will handle the smooth return to 0
     }
+
     el.addEventListener("pointerdown", press);
+    el.addEventListener("pointermove", move);
     el.addEventListener("pointerup", release);
     el.addEventListener("pointercancel", release);
-    el.addEventListener("lostpointercapture", (e)=>{ if(pid!==null){ pid=null; state[key]=false; el.classList.remove("active"); fillEl.style.height="0%"; sendState(); } });
+    el.addEventListener("lostpointercapture", (e)=>{
+      if(pid!==null){
+        pid=null;
+        targetVal = 0;
+        state[key] = 0;
+        el.classList.remove("active");
+        sendState();
+        stopUpdateLoop();
+      }
+    });
   }
-  setupPedal(brakeEl, brakeFill, "brake");
-  setupPedal(throttleEl, throttleFill, "throttle");
-  setupPedal(clutchEl, clutchFill, "clutch");
+  setupPedal(brakeEl, brakeFill, "brake", "brakeMode");
+  setupPedal(throttleEl, throttleFill, "throttle", "throttleMode");
+  setupPedal(clutchEl, clutchFill, "clutch", "clutchMode");
 
   /* ====================================================
      CUSTOM BUTTONS — 6 user-relabelable, user-rebindable
@@ -596,7 +700,42 @@
     el.addEventListener("lostpointercapture", ()=>{ if(pid!==null){ pid=null; state.customButtons[index].pressed=false; el.classList.remove("active"); sendState(); } });
   }
   customBtnEls.forEach((el, i)=>setupCustomButton(el, i));
-  renderAllCustomButtons();
+  function renderPedalModes(){
+    const container = $("pedal-modes-container");
+    container.innerHTML = "";
+    const modes = [
+      { key: "throttle", label: "THROTTLE" },
+      { key: "brake", label: "BRAKE" },
+      { key: "clutch", label: "CLUTCH" }
+    ];
+
+    modes.forEach(m => {
+      const modeKey = m.key + "Mode"; // throttleMode, etc.
+      const row = document.createElement("div");
+      row.className = "mode-toggle-row";
+      row.innerHTML = `
+        <span class="mode-label">${m.label}</span>
+        <div class="mode-toggle-group">
+          <button class="mode-toggle-btn ${state[modeKey] === 'click' ? 'selected' : ''}" data-mode="click" data-key="${m.key}">CLICK</button>
+          <button class="mode-toggle-btn ${state[modeKey] === 'slide' ? 'selected' : ''}" data-mode="slide" data-key="${m.key}">SLIDE</button>
+        </div>
+      `;
+      row.querySelectorAll(".mode-toggle-btn").forEach(btn => {
+        btn.addEventListener("click", (e) => {
+          e.preventDefault();
+          const mode = btn.dataset.mode;
+          const key = btn.dataset.key;
+          state[key + "Mode"] = mode;
+          // Update UI
+          row.querySelectorAll(".mode-toggle-btn").forEach(b => b.classList.toggle("selected", b.dataset.mode === mode));
+          // Save settings? User might want to save these.
+          // For now, let's just update state.
+        });
+      });
+      container.appendChild(row);
+    });
+  }
+  renderPedalModes();
 
   /* ---- drawer config rows for the 6 custom buttons ---- */
   function buildCustomConfigUI(){
@@ -667,6 +806,9 @@
       state.customButtons.forEach(cfg=>{ if(cfg.key) customKeys[cfg.key] = !!cfg.pressed; });
       const payload = JSON.stringify({
         Normalized_Steering: Math.round((state.normalized||0)*1000)/1000,
+        Throttle_Value: state.throttle,
+        Brake_Value: state.brake,
+        Clutch_Value: state.clutch,
         Throttle_State: !!state.throttle,
         Brake_State: !!state.brake,
         Clutch_State: !!state.clutch,
@@ -733,6 +875,15 @@
       if(k !== null){ cfg.key = k.trim().toLowerCase().slice(0,10); customChanged = true; }
     });
     if(customChanged){ renderAllCustomButtons(); buildCustomConfigUI(); }
+
+    const tmode = params.get("tmode");
+    const bmode = params.get("bmod");
+    const clmode = params.get("cmode");
+    if(tmode) state.throttleMode = tmode;
+    if(bmode) state.brakeMode = bmode;
+    if(clmode) state.clutchMode = clmode;
+    renderPedalModes();
+
     if(host){ connectWS(`ws://${host}:${port}`); }
   })();
 
