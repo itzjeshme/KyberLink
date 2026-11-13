@@ -83,6 +83,7 @@ VJOY_DEVICE_ID = 1          # the vJoy device you enabled in "Configure vJoy"
 STEER_AXIS = "X"            # X, Y, Z, RX, RY, RZ
 THROTTLE_AXIS = "Y"
 BRAKE_AXIS = "Z"
+CLUTCH_AXIS = "RX"
 
 OUTPUT_HZ = 120             # how often vJoy is updated (phone sends at 60Hz)
 
@@ -96,8 +97,10 @@ STEER_EXPO = 1.0            # 1.0 = linear, >1 = finer control near center
 # analog axis. Rates are in "full pedal travel per second".
 THROTTLE_RISE, THROTTLE_FALL = 4.0, 8.0
 BRAKE_RISE, BRAKE_FALL = 6.0, 12.0
+CLUTCH_RISE, CLUTCH_FALL = 4.0, 8.0
 THROTTLE_MAX = 1.0
 BRAKE_MAX = 1.0
+CLUTCH_MAX = 1.0
 
 WATCHDOG_TIMEOUT = 0.75     # seconds of silence before inputs are released
 RECENTER_DURATION = 0.25    # seconds for the wheel to return from full lock after a disconnect/pause
@@ -211,6 +214,7 @@ class ControllerState:
         self.steering = 0.0         # latest target from the phone (-1..1)
         self.throttle = False       # latest requested pedal states
         self.brake = False
+        self.clutch = False
         self.custom_key_states = {}
         self.last_update = 0.0
         self.connected_addr = None
@@ -219,6 +223,7 @@ class ControllerState:
         self.out_steer = 0.0
         self.out_throttle = 0.0
         self.out_brake = 0.0
+        self.out_clutch = 0.0
 
 
 controller = ControllerState()
@@ -281,12 +286,16 @@ async def output_loop():
             # --- pedals ---
             thr_target = THROTTLE_MAX if (live and controller.throttle) else 0.0
             brk_target = BRAKE_MAX if (live and controller.brake) else 0.0
+            clt_target = CLUTCH_MAX if (live and controller.clutch) else 0.0
+            
             controller.out_throttle = approach(controller.out_throttle, thr_target, THROTTLE_RISE, THROTTLE_FALL, dt)
             controller.out_brake = approach(controller.out_brake, brk_target, BRAKE_RISE, BRAKE_FALL, dt)
+            controller.out_clutch = approach(controller.out_clutch, clt_target, CLUTCH_RISE, CLUTCH_FALL, dt)
 
             vjoy.set_axis(STEER_AXIS, (controller.out_steer + 1.0) / 2.0)
             vjoy.set_axis(THROTTLE_AXIS, controller.out_throttle)
             vjoy.set_axis(BRAKE_AXIS, controller.out_brake)
+            vjoy.set_axis(CLUTCH_AXIS, controller.out_clutch)
         except Exception:
             traceback.print_exc()
 
@@ -394,6 +403,7 @@ async def handle_client(websocket):
             controller.steering = steer
             controller.throttle = bool(data.get("Throttle_State", False))
             controller.brake = bool(data.get("Brake_State", False))
+            controller.clutch = bool(data.get("Clutch_State", False))
             controller.connected_addr = addr
             controller.last_update = time.time()
 
@@ -409,7 +419,7 @@ async def handle_client(websocket):
             active_keys = ",".join(k for k, v in custom_keys.items() if v) or "-"
             print(
                 f"\rSTEER {steer:+.2f} -> {controller.out_steer:+.2f}  "
-                f"THR {controller.out_throttle*100:3.0f}%  BRK {controller.out_brake*100:3.0f}%  "
+                f"THR {controller.out_throttle*100:3.0f}%  BRK {controller.out_brake*100:3.0f}%  CLT {controller.out_clutch*100:3.0f}%  "
                 f"KEYS [{active_keys}]{status}      ",
                 end="", flush=True,
             )
@@ -444,7 +454,7 @@ async def main():
 
     try:
         vjoy = VJoy(VJOY_DEVICE_ID)
-        for axis in {STEER_AXIS, THROTTLE_AXIS, BRAKE_AXIS}:
+        for axis in {STEER_AXIS, THROTTLE_AXIS, BRAKE_AXIS, CLUTCH_AXIS}:
             vjoy.init_axis(axis)
     except VJoyError as e:
         print(f"ERROR: {e}")
@@ -460,6 +470,7 @@ async def main():
     vjoy.set_axis(STEER_AXIS, 0.5)
     vjoy.set_axis(THROTTLE_AXIS, 0.0)
     vjoy.set_axis(BRAKE_AXIS, 0.0)
+    vjoy.set_axis(CLUTCH_AXIS, 0.0)
 
     start_http_server(script_dir)
     start_hotkey_listener()
@@ -471,7 +482,7 @@ async def main():
     print(f" 1. On your phone, open:      http://{local_ip}:{HTTP_PORT}/")
     print(f" 2. In the app's connection field, enter:   {local_ip}   port {WS_PORT}")
     print(f"    (or open  http://{local_ip}:{HTTP_PORT}/?host={local_ip}&port={WS_PORT}  to skip typing it)")
-    print(f" vJoy device {VJOY_DEVICE_ID}: steer={STEER_AXIS} throttle={THROTTLE_AXIS} brake={BRAKE_AXIS}")
+    print(f" vJoy device {VJOY_DEVICE_ID}: steer={STEER_AXIS} throttle={THROTTLE_AXIS} brake={BRAKE_AXIS} clutch={CLUTCH_AXIS}")
     print(f" {PAUSE_HOTKEY_NAME} toggles engage/pause.  Ctrl+C to stop.")
     print("=" * 64)
 

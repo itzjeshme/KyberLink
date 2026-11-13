@@ -24,6 +24,8 @@
     --amber-dim:#5c3414;
     --green:#1fae5c;
     --green-glow:#36e08a;
+    --yellow:#ffeb3b;
+    --yellow-glow:#ffff00;
     --red:#e23a3a;
     --red-glow:#ff5c5c;
     --text-0:#eef0f2;
@@ -165,6 +167,7 @@
   }
   #brake .fill{ background:linear-gradient(180deg, var(--red-glow), var(--red) 70%); }
   #throttle .fill{ background:linear-gradient(180deg, var(--green-glow), var(--green) 70%); }
+  #clutch .fill{ background:linear-gradient(180deg, var(--yellow-glow), var(--yellow) 70%); }
   .pedal .label{
     position:relative; z-index:2;
     font-family:var(--sans); font-weight:700; font-size:13px; letter-spacing:.1em;
@@ -178,6 +181,7 @@
   .pedal.active .label{ color:var(--bg-0); }
   #brake.active{ box-shadow:inset 0 0 40px rgba(226,58,58,.25); }
   #throttle.active{ box-shadow:inset 0 0 40px rgba(31,174,92,.25); }
+  #clutch.active{ box-shadow:inset 0 0 40px rgba(255,235,59,.25); }
 
   /* ---------- Settings drawer ---------- */
   #drawer-backdrop{
@@ -295,6 +299,11 @@
         <button class="custom-btn" data-index="5"><span class="glyph">[K]</span><span class="label">LOOK BACK</span></button>
       </div>
       <div id="pedals-row">
+        <div class="pedal" id="clutch">
+          <div class="fill"></div>
+          <div class="glyph">RMB</div>
+          <div class="label">CLUTCH</div>
+        </div>
         <div class="pedal" id="brake">
           <div class="fill"></div>
           <div class="glyph">RMB</div>
@@ -363,6 +372,7 @@
     returnRaf: null,
     throttle: false,
     brake: false,
+    clutch: false,
     ws: null,
     wsConnected: false,
     reconnectUrl: null,
@@ -387,8 +397,10 @@
   const statusText = $("status-text");
   const brakeEl    = $("brake");
   const throttleEl = $("throttle");
+  const clutchEl = $("clutch");
   const brakeFill    = brakeEl.querySelector(".fill");
   const throttleFill = throttleEl.querySelector(".fill");
+  const clutchFill = clutchEl.querySelector(".fill");
   const customBtnEls = [...document.querySelectorAll(".custom-btn")];
 
   /* ---------------- helpers ---------------- */
@@ -542,6 +554,7 @@
   }
   setupPedal(brakeEl, brakeFill, "brake");
   setupPedal(throttleEl, throttleFill, "throttle");
+  setupPedal(clutchEl, clutchFill, "clutch");
 
   /* ====================================================
      CUSTOM BUTTONS — 6 user-relabelable, user-rebindable
@@ -656,6 +669,7 @@
         Normalized_Steering: Math.round((state.normalized||0)*1000)/1000,
         Throttle_State: !!state.throttle,
         Brake_State: !!state.brake,
+        Clutch_State: !!state.clutch,
         Custom_Keys: customKeys
       });
       try{ state.ws.send(payload); }catch(e){}
