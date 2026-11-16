@@ -236,6 +236,23 @@
   }
   .mode-toggle-btn.selected{ background:var(--bg-1); color:var(--amber); box-shadow:0 0 0 1px var(--amber-dim); }
 
+  /* ---------- Force feedback ---------- */
+  #ffb-badge{
+    height:26px; padding:0 8px; display:flex; align-items:center; flex:0 0 auto; box-sizing:border-box;
+    font-family:var(--mono); font-size:10px; font-weight:700; letter-spacing:.08em;
+    color:var(--amber); border:1px solid var(--amber-dim); border-radius:5px; background:transparent;
+  }
+  #ffb-options{ margin-top:12px; }
+  .ffb-gap{ margin-top:16px; }
+  .slider-head{ display:flex; align-items:baseline; justify-content:space-between; }
+  .slider-head .drawer-label{ margin-bottom:6px; }
+  #ffb-slider, #ffbf-slider{ width:100%; accent-color:var(--amber); }
+  #ffb-readout, #ffbf-readout{ font-family:var(--mono); font-size:12px; color:var(--amber); }
+  #ffb-live{ font-family:var(--mono); font-size:11px; color:var(--text-1); }
+  #ffb-status.ffb-ok{ color:var(--green-glow); }
+  #ffb-status.ffb-warn{ color:var(--amber); }
+  #ffb-status.ffb-bad{ color:var(--red-glow); }
+
   #close-drawer{
     width:100%; margin-top:18px; background:none; border:1px solid var(--line); color:var(--text-1);
     font-family:var(--sans); font-weight:600; font-size:12px; letter-spacing:.06em; padding:10px 0; border-radius:5px;
@@ -260,6 +277,7 @@
     </div>
     <div id="telemetry">0.00</div>
     <div id="status-right">
+      <span id="ffb-badge" class="hidden">FFB</span>
       <button id="fullscreen-btn">⛶</button>
       <button id="gear-btn">⚙</button>
     </div>
@@ -330,6 +348,45 @@
   <div id="drawer-backdrop" class="hidden"></div>
   <div id="drawer" class="hidden">
     <div class="drawer-row">
+      <span class="drawer-label">Steering mode</span>
+      <div class="mode-toggle-row">
+        <span class="mode-label">STEERING</span>
+        <div class="mode-toggle-group" id="ffb-mode-group">
+          <button class="mode-toggle-btn selected" data-ffb="0">NORMAL</button>
+          <button class="mode-toggle-btn" data-ffb="1">FFB</button>
+        </div>
+      </div>
+      <div id="ffb-options" class="hidden">
+        <div class="slider-head">
+          <span class="drawer-label">Wheel force</span>
+          <span id="ffbf-readout">100%</span>
+        </div>
+        <input type="range" id="ffbf-slider" min="25" max="300" step="5" value="100">
+        <div class="hint-text">How hard the game's force pulls the wheel. Lower it if the wheel shakes or never settles, raise it if it feels weak.</div>
+
+        <div class="mode-toggle-row ffb-gap">
+          <span class="mode-label">DIRECTION</span>
+          <div class="mode-toggle-group" id="ffb-dir-group">
+            <button class="mode-toggle-btn selected" data-inv="0">NORMAL</button>
+            <button class="mode-toggle-btn" data-inv="1">INVERTED</button>
+          </div>
+        </div>
+        <div class="hint-text">If the game pushes the wheel away from centre instead of back to it, choose INVERTED.</div>
+
+        <div class="slider-head ffb-gap">
+          <span class="drawer-label">Vibration strength</span>
+          <span id="ffb-readout">100%</span>
+        </div>
+        <input type="range" id="ffb-slider" min="25" max="300" step="5" value="100">
+        <div class="hint-text">Let go of the slider to feel a test buzz.</div>
+
+        <div id="ffb-status" class="hint-text ffb-gap"></div>
+        <div id="ffb-live" class="hint-text"></div>
+      </div>
+      <div class="hint-text">NORMAL: plain steering, the wheel springs back to centre when you let go. FFB: the game's force feedback turns the wheel (no auto-centring, as on a real wheel) and shakes the phone. Tip: add <span style="color:var(--amber)">&amp;ffb=1</span> to the bookmark to start in FFB mode.</div>
+    </div>
+
+    <div class="drawer-row">
       <span class="drawer-label">Pedal modes</span>
       <div id="pedal-modes-container"></div>
     </div>
@@ -391,6 +448,13 @@
     clutchMode: 'click',
     ws: null,
     wsConnected: false,
+    ffbMode: false,        // false = normal steering, true = force feedback (phone vibrates)
+    ffbStrength: 1.0,      // vibration strength multiplier from the settings slider
+    ffbForce: 1.0,         // how hard the game's force pulls the wheel (settings slider)
+    ffbInvert: false,      // flip the direction of the game's force
+    ffbAvailable: null,    // set by the PC: can it do force feedback at all?
+    ffbSeen: false,        // has the game sent any force feedback yet?
+    ffbReason: "", ffbHint: "",
     reconnectUrl: null,
     reconnectTimer: null,
     customButtons: [
@@ -504,6 +568,7 @@
     state.centerX = rect.left + rect.width/2;
     state.centerY = rect.top + rect.height/2;
     state.lastPointerAngle = angleFromCenter(e.clientX, e.clientY);
+    if(state.ffbMode){ phys.grip = true; phys.target = state.rotation; }   // FFB: you hold the wheel, you don't set its angle
     e.preventDefault();
   });
 
@@ -513,8 +578,12 @@
     let delta = cur - state.lastPointerAngle;
     if(delta > 180) delta -= 360;
     if(delta < -180) delta += 360;
-    state.rotation = clamp(state.rotation + delta, -state.halfRange, state.halfRange);
     state.lastPointerAngle = cur;
+    if(state.ffbMode){       // the finger only says where the wheel is being held; the physics loop turns the wheel
+      phys.target = clamp(phys.target + delta, -state.halfRange, state.halfRange);
+      return;
+    }
+    state.rotation = clamp(state.rotation + delta, -state.halfRange, state.halfRange);
     updateWheelVisual();
   });
 
@@ -522,12 +591,16 @@
     if(!state.dragging || e.pointerId !== state.pointerId) return;
     state.dragging = false;
     state.pointerId = null;
-    animateReturnToCenter();
+    if(state.ffbMode) phys.grip = false;    // let go: the game's force decides where the wheel goes, no auto-centre
+    else animateReturnToCenter();
   }
   wheelRim.addEventListener("pointerup", endDrag);
   wheelRim.addEventListener("pointercancel", endDrag);
   wheelRim.addEventListener("lostpointercapture", ()=>{
-    if(state.dragging){ state.dragging = false; state.pointerId = null; animateReturnToCenter(); }
+    if(state.dragging){
+      state.dragging = false; state.pointerId = null;
+      if(state.ffbMode) phys.grip = false; else animateReturnToCenter();
+    }
   });
 
   function setMaxAngle(angle){
@@ -782,8 +855,17 @@
     catch(err){ setConnUI(false); statusText.textContent = "bad address"; return; }
     state.ws = ws;
     statusText.textContent = "connecting…";
-    ws.onopen = ()=>{ setConnUI(true); };
-    ws.onclose = ()=>{ setConnUI(false); scheduleReconnect(); };
+    ws.onopen = ()=>{
+      setConnUI(true);
+      state.ffbAvailable = null; state.ffbSeen = false;
+      sendConfig();                       // tell the PC which mode we're in
+      renderFfbStatus();
+    };
+    ws.onclose = ()=>{ setConnUI(false); haptics.silence(); renderFfbStatus(); scheduleReconnect(); };
+    ws.onmessage = (ev)=>{
+      let m; try{ m = JSON.parse(ev.data); }catch(e){ return; }
+      if(m && typeof m === "object") onFfbMessage(m);
+    };
     ws.onerror = ()=>{ /* onclose fires right after */ };
   }
 
@@ -819,6 +901,285 @@
   }
 
   setInterval(sendState, 1000/60);
+
+  /* ====================================================
+     FORCE FEEDBACK
+     In FFB mode the wheel is a real body instead of a dragged picture:
+       - The game's steady force (streamed by the PC) turns it. In a corner
+         it is pulled back towards centre; let go and it goes where the game
+         pushes it. With no force it stays where you left it: there is no
+         auto-centring, as on a real wheel.
+       - Spring / damper / friction / inertia effects from the game are
+         evaluated here, with the wheel's own motion, so they never wait on
+         the network.
+       - Your finger holds the wheel through a stiff spring, and the wheel
+         gives a little under strong force.
+     The phone also vibrates. The PC sends a "shake" level (kerbs, bumps,
+     fast periodic effects, a little of the steady load). The Vibration API
+     only knows "on for N ms", so strength is pulse density: every tick the
+     level is added to an accumulator and one short pulse fires whenever it
+     passes 1. Level 0.25 = a pulse every 4th tick, level 1 = pulses back to
+     back = a continuous buzz.
+     ==================================================== */
+
+  /* ---- how the wheel feels (tweak these) ---- */
+  const FFB_ACCEL     = 12000;  // deg/s² of wheel acceleration per 1.0 of game force
+  const FFB_DAMPING   = 26;     // 1/s viscous drag. Keeps the wheel from hunting back and forth when the game's force is stiff
+  const FFB_FRICTION  = 0.02;   // game force a wheel at rest needs before it starts to move
+  const FFB_GRIP_TAU  = 0.02;   // s: how tightly the wheel follows your finger (smaller = stiffer)
+  const FFB_SLIP      = 18;     // deg the wheel gives under your finger per 1.0 of game force
+  const FFB_MAX_LEAD  = 60;     // deg: the most the wheel may trail your finger
+  const FFB_MAX_SPEED = 2500;   // deg/s
+  const FFB_VEL_FULL  = 1.0;    // wheel speed / acceleration that count as "full" for damper and inertia effects
+  const FFB_ACC_FULL  = 20.0;   //   (axis units per s and per s², lock to lock = 2 - the same scales the PC uses)
+  /* ---- vibration ---- */
+  const FFB_TICK_MS   = 30;     // pulse length and scheduler period
+  const FFB_MIN_LEVEL = 0.03;   // below this the phone stays quiet
+  const FFB_STALE_MS  = 300;    // no word from the PC for this long: no force, no vibration (never a stuck one)
+  const FFB_CURVE     = 0.75;   // < 1 boosts weak vibration so small forces can still be felt
+
+  const ffbBadge   = $("ffb-badge"),   ffbOptions  = $("ffb-options"), ffbDrawer = $("drawer"),
+        ffbSlider  = $("ffb-slider"),  ffbReadout  = $("ffb-readout"),
+        ffbfSlider = $("ffbf-slider"), ffbfReadout = $("ffbf-readout"),
+        ffbStatus  = $("ffb-status"),  ffbLive     = $("ffb-live");
+  const ffbModeBtns = [...document.querySelectorAll("#ffb-mode-group .mode-toggle-btn")];
+  const ffbDirBtns  = [...document.querySelectorAll("#ffb-dir-group .mode-toggle-btn")];
+
+  const NO_CONDS = [];
+  const ffbIn = { force: 0, vib: 0, conds: NO_CONDS, types: [], stamp: 0 };   // the latest message from the PC
+  const phys  = { w: 0, a: 0, target: 0, grip: false, raf: 0, last: 0, hit: 0, thumpAt: 0, liveAt: 0, painted: NaN, cf: 0, smoothForce: 0 };
+
+  const haptics = (function(){
+    const supported = typeof navigator.vibrate === "function";
+    let level = 0, stamp = 0, acc = 0, buzzing = false, timer = null, preview = null, painted = -1;
+
+    function paint(lv){                  // the badge glows with the vibration, even where vibrating isn't supported
+      const q = Math.round(lv * 20) / 20;
+      if(q === painted) return;
+      painted = q;
+      ffbBadge.style.background = q > 0 ? `rgba(255,106,0,${0.12 + 0.78*q})` : "transparent";
+      ffbBadge.style.color = q > 0.5 ? "var(--bg-0)" : "";
+    }
+    function quiet(){ acc = 0; if(buzzing){ buzzing = false; vibrate(0); } }
+    function tick(){
+      const now = performance.now();
+      let lv = level;
+      if(preview && now < preview.until) lv = preview.level;
+      else if(now - stamp > FFB_STALE_MS) lv = 0;          // the PC went quiet: never get stuck buzzing
+      paint(lv);
+      if(lv < FFB_MIN_LEVEL){ quiet(); return; }
+      acc += lv;
+      if(acc >= 1){
+        acc -= 1;
+        vibrate(lv > 0.92 ? FFB_TICK_MS + 12 : FFB_TICK_MS);   // overlap at full tilt so pulses fuse into one buzz
+        buzzing = true;
+      }
+    }
+    return {
+      supported,
+      enable(on){                                          // the scheduler only runs in FFB mode
+        clearInterval(timer); timer = null;
+        level = 0; preview = null; quiet(); paint(0);
+        if(on) timer = setInterval(tick, FFB_TICK_MS);
+      },
+      set(lv){ level = clamp(lv, 0, 1); stamp = performance.now(); },
+      silence(){ level = 0; preview = null; quiet(); paint(0); },
+      preview(lv, ms){ preview = { level: clamp(lv, 0, 1), until: performance.now() + ms }; },
+    };
+  })();
+
+  /* A game condition effect, [kind, centre, k+, k-, sat+, sat-, deadband], -> force (-1..1) on the wheel.
+     kind 1 spring (reacts to position), 2 damper (speed), 3 friction (speed), 4 inertia (acceleration).
+     A positive coefficient resists: it pushes back against the displacement / motion. */
+  function conditionForce(c, x, v, a){
+    const kind = c[0];
+    const metric = kind === 1 ? x : kind === 4 ? clamp(a / FFB_ACC_FULL, -1, 1) : clamp(v / FFB_VEL_FULL, -1, 1);
+    const d = metric - c[1], dead = c[6];
+    if(kind === 3){                                        // friction: constant drag whenever it is moving
+      if(Math.abs(d) <= Math.max(dead, 0.03)) return 0;
+      const pos = d > 0, cap = pos ? c[4] : c[5];
+      return clamp(-Math.sign(d) * (pos ? c[2] : c[3]), -cap, cap);
+    }
+    if(d >  dead) return clamp(-c[2] * (d - dead), -c[4], c[4]);
+    if(d < -dead) return clamp(-c[3] * (d + dead), -c[5], c[5]);
+    return 0;
+  }
+
+  /* One step of the wheel: game force + condition effects + damping, plus your finger if it is on the wheel. */
+  function physicsStep(h, force, conds, aim){
+    const half = state.halfRange;
+    let torque = force;
+    let cf = 0;
+    if(conds.length){
+      const x = state.rotation / half, v = phys.w / half, a = phys.a / half;
+      for(let i = 0; i < conds.length; i++) cf += conditionForce(conds[i], x, v, a);
+      torque += cf * state.ffbForce;                       // the "Wheel force" slider scales every force the game applies
+    }
+    phys.cf = cf * state.ffbForce;
+    let acc = FFB_ACCEL * clamp(torque, -1.5, 1.5) - FFB_DAMPING * phys.w;
+    if(phys.grip){                                         // your finger: a critically damped spring to where you hold the wheel
+      acc += (aim - state.rotation) / (FFB_GRIP_TAU * FFB_GRIP_TAU) - Math.max(0, 2 / FFB_GRIP_TAU - FFB_DAMPING) * phys.w;
+    }
+    let w = phys.w + acc * h;
+    if(!phys.grip){                                        // dry friction: holds a still wheel until the force beats it, then drags
+      const drag = FFB_ACCEL * FFB_FRICTION * h;
+      w = Math.abs(w) <= drag ? 0 : w - Math.sign(w) * drag;
+    }
+    w = clamp(w, -FFB_MAX_SPEED, FFB_MAX_SPEED);
+    phys.a += ((w - phys.w) / h - phys.a) * 0.2;           // smoothed, for inertia effects
+    phys.w = w;
+    let r = state.rotation + w * h;
+    if(r > half || r < -half){                             // end stop
+      phys.hit = Math.max(phys.hit, Math.abs(w));
+      r = clamp(r, -half, half);
+      phys.w = 0;
+    }
+    state.rotation = r;
+  }
+
+  function ffbFrame(now){
+    phys.raf = requestAnimationFrame(ffbFrame);
+    let dt = (now - phys.last) / 1000;
+    phys.last = now;
+    if(!(dt > 0)) return;
+    if(dt > 0.05) dt = 0.05;
+    const fresh = now - ffbIn.stamp <= FFB_STALE_MS;       // a silent PC means no force, never a stuck force
+    const targetForce = fresh ? ffbIn.force * state.ffbForce * (state.ffbInvert ? -1 : 1) : 0;
+    const alpha = 1 - Math.exp(-dt / 0.015);
+    phys.smoothForce += (targetForce - phys.smoothForce) * alpha;
+    const force = phys.smoothForce;
+    const conds = fresh ? ffbIn.conds : NO_CONDS;
+    const half = state.halfRange;
+    if(phys.grip){                                         // where you hold the wheel: inside the lock, never far ahead of the wheel
+      phys.target = clamp(clamp(phys.target, -half, half), state.rotation - FFB_MAX_LEAD, state.rotation + FFB_MAX_LEAD);
+    }
+    const aim = clamp(phys.target + FFB_SLIP * (force + (phys.cf || 0)), -half, half);   // the wheel gives a little under force
+    const n = Math.max(1, Math.ceil(dt / 0.004)), h = dt / n;
+    for(let i = 0; i < n; i++) physicsStep(h, force, conds, aim);
+    if(!isFinite(state.rotation) || !isFinite(phys.w)){ state.rotation = 0; phys.w = 0; phys.a = 0; }
+
+    if(phys.hit){                                          // slammed into the end stop: a thump
+      if(phys.hit > 150 && now - phys.thumpAt > 250){
+        phys.thumpAt = now;
+        vibrate(Math.round(clamp(15 + phys.hit / 25, 20, 60)));
+      }
+      phys.hit = 0;
+    }
+    if(state.rotation !== phys.painted){ phys.painted = state.rotation; updateWheelVisual(); }
+    paintFfbLive(now);
+  }
+
+  function startPhysics(){
+    if(phys.raf) return;
+    phys.last = performance.now();
+    phys.raf = requestAnimationFrame(ffbFrame);
+  }
+  function stopPhysics(){
+    if(phys.raf){ cancelAnimationFrame(phys.raf); phys.raf = 0; }
+    phys.w = 0; phys.a = 0; phys.grip = false; phys.cf = 0; phys.smoothForce = 0;
+  }
+
+  const FFB_TYPE_NAMES = { 1: "Constant", 2: "Ramp", 3: "Square", 4: "Sine", 5: "Triangle", 6: "Saw up", 7: "Saw down",
+                           8: "Spring", 9: "Damper", 10: "Inertia", 11: "Friction" };
+  function paintFfbLive(now){                              // live numbers in the settings drawer (also handy for debugging)
+    if(now - phys.liveAt < 250 || ffbDrawer.classList.contains("hidden")) return;
+    phys.liveAt = now;
+    const fresh = now - ffbIn.stamp <= 600;
+    const f = fresh ? ffbIn.force : 0, v = fresh ? ffbIn.vib : 0;
+    const names = fresh ? ffbIn.types.map(t => FFB_TYPE_NAMES[t] || ("#" + t)).join(", ") : "";
+    let condStr = "";
+    if(fresh && ffbIn.conds.length){
+      const parts = [];
+      for(const c of ffbIn.conds){
+        const k = Math.round(Math.max(Math.abs(c[2]), Math.abs(c[3])) * 100);
+        const name = c[0] === 1 ? "spring" : c[0] === 2 ? "damper" : c[0] === 3 ? "friction" : "inertia";
+        parts.push(`${name} ${k}%`);
+      }
+      if(parts.length) condStr = " · " + parts.join(", ");
+    }
+    ffbLive.textContent = `force ${f >= 0 ? "+" : ""}${f.toFixed(2)}${condStr} · shake ${Math.round(v * 100)}% · ${names || "no effects playing"}`;
+  }
+
+  function sendConfig(){
+    if(state.ws && state.ws.readyState === WebSocket.OPEN){
+      try{ state.ws.send(JSON.stringify({ type: "config", ffb: state.ffbMode })); }catch(e){}
+    }
+  }
+
+  function renderFfbStatus(){
+    if(!state.ffbMode){ ffbStatus.textContent = ""; return; }
+    let text, cls = "warn";
+    if(!state.wsConnected)               text = "Not connected to the PC.";
+    else if(state.ffbAvailable === null) text = "Asking the PC…";
+    else if(!state.ffbAvailable)       { text = "Unavailable: " + (state.ffbReason || "the PC could not start force feedback."); cls = "bad"; }
+    else if(!state.ffbSeen)              text = "Waiting for the game to send force feedback. Make sure it uses the vJoy device with force feedback on.";
+    else                               { text = "Receiving force feedback from the game."; cls = "ok"; }
+    if(state.ffbAvailable && state.ffbHint) text += " " + state.ffbHint;
+    if(!haptics.supported) text += " This browser can't vibrate (iOS Safari has no vibration support), but the wheel still moves and the FFB badge shows the shaking.";
+    ffbStatus.textContent = text;
+    ffbStatus.className = "hint-text ffb-gap ffb-" + cls;
+  }
+
+  function setFfbMode(on, fromTap){
+    state.ffbMode = !!on;
+    ffbModeBtns.forEach(b => b.classList.toggle("selected", (b.dataset.ffb === "1") === state.ffbMode));
+    ffbOptions.classList.toggle("hidden", !state.ffbMode);
+    ffbBadge.classList.toggle("hidden", !state.ffbMode);
+    haptics.enable(state.ffbMode);
+    try{ localStorage.setItem("kyberlink_ffb_mode", state.ffbMode ? "1" : "0"); }catch(e){}
+    if(state.ffbMode){
+      cancelReturn();
+      phys.w = 0; phys.a = 0; phys.target = state.rotation; phys.grip = state.dragging;
+      startPhysics();
+      if(fromTap) vibrate(40);                             // confirmation buzz (browsers want a tap first, so not on page load)
+    }else{
+      stopPhysics();
+      if(!state.dragging) animateReturnToCenter();         // NORMAL springs back to centre; don't leave the wheel stranded off-centre
+    }
+    sendConfig();
+    renderFfbStatus();
+  }
+  ffbModeBtns.forEach(b => b.addEventListener("click", ()=> setFfbMode(b.dataset.ffb === "1", true)));
+
+  function setFfbInvert(on){
+    state.ffbInvert = !!on;
+    ffbDirBtns.forEach(b => b.classList.toggle("selected", (b.dataset.inv === "1") === state.ffbInvert));
+    try{ localStorage.setItem("kyberlink_ffb_invert", state.ffbInvert ? "1" : "0"); }catch(e){}
+  }
+  ffbDirBtns.forEach(b => b.addEventListener("click", ()=> setFfbInvert(b.dataset.inv === "1")));
+
+  function onFfbMessage(m){
+    if(m.type === "ffb"){
+      if(!state.ffbMode) return;
+      ffbIn.force = clamp(+m.f || 0, -1, 1);
+      ffbIn.vib = clamp(+m.v || 0, 0, 1);
+      ffbIn.conds = Array.isArray(m.c) ? m.c.filter(c => Array.isArray(c) && c.length >= 7 && c.every(Number.isFinite)) : NO_CONDS;
+      ffbIn.types = Array.isArray(m.t) ? m.t : [];
+      ffbIn.stamp = performance.now();
+      haptics.set(Math.pow(clamp(ffbIn.vib * state.ffbStrength, 0, 1), FFB_CURVE));
+    }else if(m.type === "ffb_status"){
+      state.ffbAvailable = !!m.available;
+      state.ffbReason = m.reason || "";
+      state.ffbHint = m.hint || "";
+      state.ffbSeen = !!m.seen;
+      renderFfbStatus();
+    }
+  }
+
+  ffbfSlider.addEventListener("input", ()=>{
+    state.ffbForce = parseInt(ffbfSlider.value, 10) / 100;
+    ffbfReadout.textContent = ffbfSlider.value + "%";
+    try{ localStorage.setItem("kyberlink_ffb_force", ffbfSlider.value); }catch(e){}
+  });
+  ffbSlider.addEventListener("input", ()=>{
+    state.ffbStrength = parseInt(ffbSlider.value, 10) / 100;
+    ffbReadout.textContent = ffbSlider.value + "%";
+    try{ localStorage.setItem("kyberlink_ffb_strength", ffbSlider.value); }catch(e){}
+  });
+  ffbSlider.addEventListener("change", ()=> haptics.preview(Math.pow(clamp(0.5 * state.ffbStrength, 0, 1), FFB_CURVE), 600));   // what a 50% shake feels like at this strength
+
+  document.addEventListener("visibilitychange", ()=>{ if(document.hidden) haptics.silence(); });
+  window.addEventListener("pagehide", ()=> haptics.silence());
 
   /* ====================================================
      SETTINGS DRAWER
@@ -883,6 +1244,33 @@
     if(bmode) state.brakeMode = bmode;
     if(clmode) state.clutchMode = clmode;
     renderPedalModes();
+
+    // Load saved preferences from localStorage first
+    try{
+      const savedInv = localStorage.getItem("kyberlink_ffb_invert");
+      if(savedInv !== null) setFfbInvert(savedInv === "1");
+      const savedMode = localStorage.getItem("kyberlink_ffb_mode");
+      if(savedMode !== null) setFfbMode(savedMode === "1", false);
+      const savedForce = parseInt(localStorage.getItem("kyberlink_ffb_force"), 10);
+      if(!isNaN(savedForce) && savedForce >= 25 && savedForce <= 300){
+        ffbfSlider.value = savedForce; ffbfReadout.textContent = savedForce + "%"; state.ffbForce = savedForce / 100;
+      }
+      const savedStrength = parseInt(localStorage.getItem("kyberlink_ffb_strength"), 10);
+      if(!isNaN(savedStrength) && savedStrength >= 25 && savedStrength <= 300){
+        ffbSlider.value = savedStrength; ffbReadout.textContent = savedStrength + "%"; state.ffbStrength = savedStrength / 100;
+      }
+    }catch(e){}
+
+    const ffbs = parseInt(params.get("ffbs"), 10);
+    if(!isNaN(ffbs) && ffbs >= 25 && ffbs <= 300){
+      ffbSlider.value = ffbs; ffbReadout.textContent = ffbs + "%"; state.ffbStrength = ffbs / 100;
+    }
+    const ffbf = parseInt(params.get("ffbf"), 10);
+    if(!isNaN(ffbf) && ffbf >= 25 && ffbf <= 300){
+      ffbfSlider.value = ffbf; ffbfReadout.textContent = ffbf + "%"; state.ffbForce = ffbf / 100;
+    }
+    if(params.get("ffbinv") !== null) setFfbInvert(params.get("ffbinv") === "1");
+    if(params.get("ffb") !== null) setFfbMode(params.get("ffb") === "1", false);
 
     if(host){ connectWS(`ws://${host}:${port}`); }
   })();
