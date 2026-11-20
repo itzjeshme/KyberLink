@@ -242,6 +242,22 @@
     font-family:var(--mono); font-size:10px; font-weight:700; letter-spacing:.08em;
     color:var(--amber); border:1px solid var(--amber-dim); border-radius:5px; background:transparent;
   }
+  #forza-badge{
+    height:26px; padding:0 8px; display:flex; align-items:center; flex:0 0 auto; box-sizing:border-box;
+    font-family:var(--mono); font-size:10px; font-weight:700; letter-spacing:.08em;
+    color:var(--green-glow); border:1px solid var(--green); border-radius:5px; background:rgba(31,174,92,.15);
+  }
+  #forza-nav-group{
+    display:flex; gap:5px; align-items:center; flex:0 0 auto;
+  }
+  .forza-nav-btn{
+    background:none; border:1px solid var(--line); color:var(--text-1);
+    height:26px; padding:0 7px; border-radius:5px; font-family:var(--mono); font-size:10px; font-weight:700;
+    letter-spacing:.05em; display:flex; align-items:center; justify-content:center; flex:0 0 auto; white-space:nowrap;
+  }
+  .forza-nav-btn:active, .forza-nav-btn.active{
+    border-color:var(--green); color:var(--green); background:rgba(31,174,92,.2);
+  }
   #ffb-options{ margin-top:12px; }
   .ffb-gap{ margin-top:16px; }
   .slider-head{ display:flex; align-items:baseline; justify-content:space-between; }
@@ -277,6 +293,13 @@
     </div>
     <div id="telemetry">0.00</div>
     <div id="status-right">
+      <div id="forza-nav-group" class="hidden">
+        <button id="forza-map-btn" class="forza-nav-btn" title="Map">MAP</button>
+        <button id="forza-rewind-btn" class="forza-nav-btn" title="Rewind">REWIND</button>
+        <button id="forza-view-btn" class="forza-nav-btn" title="View / Change Camera">VIEW</button>
+        <button id="forza-menu-btn" class="forza-nav-btn" title="Menu / Pause">PAUSE</button>
+      </div>
+      <span id="forza-badge" class="hidden">FORZA</span>
       <span id="ffb-badge" class="hidden">FFB</span>
       <button id="fullscreen-btn">⛶</button>
       <button id="gear-btn">⚙</button>
@@ -317,12 +340,12 @@
 
     <div id="pedal-zone">
       <div id="custom-buttons-row">
-        <button class="custom-btn" data-index="3"><span class="glyph">[L]</span><span class="label">LIGHTS</span></button>
-        <button class="custom-btn" data-index="4"><span class="glyph">[I]</span><span class="label">LIMITER</span></button>
-        <button class="custom-btn" data-index="0"><span class="glyph">[E]</span><span class="label">GEAR UP</span></button>
-        <button class="custom-btn" data-index="5"><span class="glyph">[K]</span><span class="label">LOOK BACK</span></button>
-        <button class="custom-btn" data-index="2"><span class="glyph">[SPACE]</span><span class="label">HANDBRAKE</span></button>
-        <button class="custom-btn" data-index="1"><span class="glyph">[Q]</span><span class="label">GEAR DOWN</span></button>
+        <button class="custom-btn" data-index="0"><span class="glyph">[L]</span><span class="label">LIGHTS</span></button>
+        <button class="custom-btn" data-index="1"><span class="glyph">[I]</span><span class="label">LIMITER</span></button>
+        <button class="custom-btn" data-index="2"><span class="glyph">[E]</span><span class="label">GEAR UP</span></button>
+        <button class="custom-btn" data-index="3"><span class="glyph">[K]</span><span class="label">LOOK BACK</span></button>
+        <button class="custom-btn" data-index="4"><span class="glyph">[SPACE]</span><span class="label">HANDBRAKE</span></button>
+        <button class="custom-btn" data-index="5"><span class="glyph">[Q]</span><span class="label">GEAR DOWN</span></button>
       </div>
       <div id="pedals-row">
         <div class="pedal" id="clutch">
@@ -384,6 +407,18 @@
         <div id="ffb-live" class="hint-text"></div>
       </div>
       <div class="hint-text">NORMAL: plain steering, the wheel springs back to centre when you let go. FFB: the game's force feedback turns the wheel (no auto-centring, as on a real wheel) and shakes the phone. Tip: add <span style="color:var(--amber)">&amp;ffb=1</span> to the bookmark to start in FFB mode.</div>
+    </div>
+
+    <div class="drawer-row">
+      <span class="drawer-label">Forza Mode</span>
+      <div class="mode-toggle-row">
+        <span class="mode-label">FORZA HORIZON</span>
+        <div class="mode-toggle-group" id="forza-mode-group">
+          <button class="mode-toggle-btn selected" data-forza="0">OFF</button>
+          <button class="mode-toggle-btn" data-forza="1">ON</button>
+        </div>
+      </div>
+      <div class="hint-text">Enables Forza Horizon compatibility: inverts pedal axes (0=full press, max=released) to match the GameInput RacingWheel descriptor (<span style="color:var(--amber)">vjoy.reg</span>), maps handbrake to a wheel button, adds top-bar Map, Rewind, View, and Pause controls, and configures Forza wheel buttons (Cancel, Accept, Gear Up/Down). Tip: add <span style="color:var(--amber)">&amp;forza=1</span> to the bookmark to start in Forza mode.</div>
     </div>
 
     <div class="drawer-row">
@@ -457,6 +492,9 @@
     ffbReason: "", ffbHint: "",
     reconnectUrl: null,
     reconnectTimer: null,
+    forzaMode: false,      // false = normal mode, true = Forza Horizon GameInput compatibility
+    handbrake: 0,          // Forza analog handbrake (0..1)
+    forzaButtons: {},      // button_id (1-based) -> bool for vJoy buttons
     customButtons: [
       { label: "LIGHTS",     key: "l",     pressed: false },
       { label: "LIMITER",    key: "i",     pressed: false },
@@ -482,6 +520,13 @@
   const throttleFill = throttleEl.querySelector(".fill");
   const clutchFill = clutchEl.querySelector(".fill");
   const customBtnEls = [...document.querySelectorAll(".custom-btn")];
+  const forzaBadge     = $("forza-badge");
+  const forzaNavGroup  = $("forza-nav-group");
+  const forzaMapBtn    = $("forza-map-btn");
+  const forzaRewindBtn = $("forza-rewind-btn");
+  const forzaViewBtn   = $("forza-view-btn");
+  const forzaMenuBtn   = $("forza-menu-btn");
+  const forzaModeBtns  = [...document.querySelectorAll("#forza-mode-group .mode-toggle-btn")];
 
   /* ---------------- helpers ---------------- */
   function vibrate(ms){ try{ if(navigator.vibrate) navigator.vibrate(ms); }catch(e){} }
@@ -736,13 +781,29 @@
   /* ====================================================
      CUSTOM BUTTONS — 6 user-relabelable, user-rebindable
      buttons that send PC keyboard keys (not mouse clicks).
-     Same pointer-capture-based hold pattern as the pedals.
+     In Forza mode, these automatically map to Forza's
+     GameInput functions (Gear Up/Down, Handbrake, A, B, X).
      ==================================================== */
+  const FORZA_PRESET_BUTTONS = [
+    { label: "CANCEL",    glyph: "[XBOX B]", vjoyBtn: 4 },
+    { label: "BUTTON 8",  glyph: "[BTN 8]",  vjoyBtn: 8 },
+    { label: "GEAR UP",   glyph: "[SHIFT+]", vjoyBtn: 18 },
+    { label: "ACCEPT",    glyph: "[XBOX A]", vjoyBtn: 3 },
+    { label: "HANDBRAKE", glyph: "[BTN 7]",  vjoyBtn: 7 },
+    { label: "GEAR DOWN", glyph: "[SHIFT-]", vjoyBtn: 17 },
+  ];
+
   function renderCustomButton(i){
-    const cfg = state.customButtons[i];
     const el = customBtnEls[i];
-    el.querySelector(".label").textContent = cfg.label || `BUTTON ${i+1}`;
-    el.querySelector(".glyph").textContent = cfg.key ? `[${cfg.key.toUpperCase()}]` : "[—]";
+    if(state.forzaMode){
+      const fb = FORZA_PRESET_BUTTONS[i];
+      el.querySelector(".label").textContent = fb.label;
+      el.querySelector(".glyph").textContent = fb.glyph;
+    } else {
+      const cfg = state.customButtons[i];
+      el.querySelector(".label").textContent = cfg.label || `BUTTON ${i+1}`;
+      el.querySelector(".glyph").textContent = cfg.key ? `[${cfg.key.toUpperCase()}]` : "[—]";
+    }
   }
   function renderAllCustomButtons(){
     state.customButtons.forEach((_, i)=>renderCustomButton(i));
@@ -755,6 +816,10 @@
       pid = e.pointerId;
       try{ el.setPointerCapture(pid); }catch(err){}
       state.customButtons[index].pressed = true;
+      if(state.forzaMode){
+        const f = FORZA_PRESET_BUTTONS[index];
+        if(f && f.vjoyBtn) state.forzaButtons[f.vjoyBtn] = true;
+      }
       el.classList.add("active");
       vibrate(10);
       sendState();
@@ -764,15 +829,67 @@
       if(e.pointerId !== pid) return;
       pid = null;
       state.customButtons[index].pressed = false;
+      if(state.forzaMode){
+        const f = FORZA_PRESET_BUTTONS[index];
+        if(f && f.vjoyBtn) state.forzaButtons[f.vjoyBtn] = false;
+      }
       el.classList.remove("active");
       sendState();
     }
     el.addEventListener("pointerdown", press);
     el.addEventListener("pointerup", release);
     el.addEventListener("pointercancel", release);
-    el.addEventListener("lostpointercapture", ()=>{ if(pid!==null){ pid=null; state.customButtons[index].pressed=false; el.classList.remove("active"); sendState(); } });
+    el.addEventListener("lostpointercapture", ()=>{
+      if(pid!==null){
+        pid=null;
+        state.customButtons[index].pressed=false;
+        if(state.forzaMode){
+          const f = FORZA_PRESET_BUTTONS[index];
+          if(f && f.vjoyBtn) state.forzaButtons[f.vjoyBtn] = false;
+        }
+        el.classList.remove("active");
+        sendState();
+      }
+    });
   }
   customBtnEls.forEach((el, i)=>setupCustomButton(el, i));
+
+  function setupNavBtn(el, btnId){
+    if(!el) return;
+    let pid = null;
+    function press(e){
+      if(pid !== null) return;
+      pid = e.pointerId;
+      try{ el.setPointerCapture(pid); }catch(err){}
+      state.forzaButtons[btnId] = true;
+      el.classList.add("active");
+      vibrate(10);
+      sendState();
+      e.preventDefault();
+    }
+    function release(e){
+      if(e.pointerId !== pid) return;
+      pid = null;
+      state.forzaButtons[btnId] = false;
+      el.classList.remove("active");
+      sendState();
+    }
+    el.addEventListener("pointerdown", press);
+    el.addEventListener("pointerup", release);
+    el.addEventListener("pointercancel", release);
+    el.addEventListener("lostpointercapture", ()=>{
+      if(pid !== null){
+        pid = null;
+        state.forzaButtons[btnId] = false;
+        el.classList.remove("active");
+        sendState();
+      }
+    });
+  }
+  setupNavBtn(forzaMapBtn, 6);
+  setupNavBtn(forzaRewindBtn, 5);
+  setupNavBtn(forzaViewBtn, 2);
+  setupNavBtn(forzaMenuBtn, 1);
   function renderPedalModes(){
     const container = $("pedal-modes-container");
     container.innerHTML = "";
@@ -886,7 +1003,7 @@
     if(state.ws && state.ws.readyState === WebSocket.OPEN){
       const customKeys = {};
       state.customButtons.forEach(cfg=>{ if(cfg.key) customKeys[cfg.key] = !!cfg.pressed; });
-      const payload = JSON.stringify({
+      const payload = {
         Normalized_Steering: Math.round((state.normalized||0)*1000)/1000,
         Throttle_Value: state.throttle,
         Brake_Value: state.brake,
@@ -895,8 +1012,13 @@
         Brake_State: !!state.brake,
         Clutch_State: !!state.clutch,
         Custom_Keys: customKeys
-      });
-      try{ state.ws.send(payload); }catch(e){}
+      };
+      if(state.forzaMode){
+        payload.Handbrake_Value = state.handbrake || 0.0;
+        payload.Handbrake_State = !!state.handbrake;
+        payload.Forza_Buttons = state.forzaButtons || {};
+      }
+      try{ state.ws.send(JSON.stringify(payload)); }catch(e){}
     }
   }
 
@@ -1102,7 +1224,13 @@
 
   function sendConfig(){
     if(state.ws && state.ws.readyState === WebSocket.OPEN){
-      try{ state.ws.send(JSON.stringify({ type: "config", ffb: state.ffbMode })); }catch(e){}
+      try{
+        state.ws.send(JSON.stringify({
+          type: "config",
+          ffb: state.ffbMode,
+          forza: state.forzaMode
+        }));
+      }catch(e){}
     }
   }
 
@@ -1147,6 +1275,23 @@
     try{ localStorage.setItem("kyberlink_ffb_invert", state.ffbInvert ? "1" : "0"); }catch(e){}
   }
   ffbDirBtns.forEach(b => b.addEventListener("click", ()=> setFfbInvert(b.dataset.inv === "1")));
+
+  function setForzaMode(on, fromTap){
+    state.forzaMode = !!on;
+    forzaModeBtns.forEach(b => b.classList.toggle("selected", (b.dataset.forza === "1") === state.forzaMode));
+    if(forzaBadge) forzaBadge.classList.toggle("hidden", !state.forzaMode);
+    if(forzaNavGroup) forzaNavGroup.classList.toggle("hidden", !state.forzaMode);
+    if(!state.forzaMode){
+      state.handbrake = 0.0;
+      state.forzaButtons = {};
+    }
+    renderAllCustomButtons();
+    try{ localStorage.setItem("kyberlink_forza_mode", state.forzaMode ? "1" : "0"); }catch(e){}
+    if(fromTap) vibrate(30);
+    sendConfig();
+    sendState();
+  }
+  forzaModeBtns.forEach(b => b.addEventListener("click", ()=> setForzaMode(b.dataset.forza === "1", true)));
 
   function onFfbMessage(m){
     if(m.type === "ffb"){
@@ -1251,6 +1396,8 @@
       if(savedInv !== null) setFfbInvert(savedInv === "1");
       const savedMode = localStorage.getItem("kyberlink_ffb_mode");
       if(savedMode !== null) setFfbMode(savedMode === "1", false);
+      const savedForza = localStorage.getItem("kyberlink_forza_mode");
+      if(savedForza !== null) setForzaMode(savedForza === "1", false);
       const savedForce = parseInt(localStorage.getItem("kyberlink_ffb_force"), 10);
       if(!isNaN(savedForce) && savedForce >= 25 && savedForce <= 300){
         ffbfSlider.value = savedForce; ffbfReadout.textContent = savedForce + "%"; state.ffbForce = savedForce / 100;
@@ -1271,6 +1418,7 @@
     }
     if(params.get("ffbinv") !== null) setFfbInvert(params.get("ffbinv") === "1");
     if(params.get("ffb") !== null) setFfbMode(params.get("ffb") === "1", false);
+    if(params.get("forza") !== null) setForzaMode(params.get("forza") === "1", false);
 
     if(host){ connectWS(`ws://${host}:${port}`); }
   })();

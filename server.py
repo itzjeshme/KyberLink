@@ -100,6 +100,15 @@ THROTTLE_AXIS = "Y"
 BRAKE_AXIS = "Z"
 CLUTCH_AXIS = "RX"
 
+# Forza Mode — matches the vjoy.reg GameInput RacingWheel descriptor
+# Throttle/Brake/Clutch are axis-inverted: 0=full, max=released
+FORZA_MODE_DEFAULT = False       # True = start in Forza mode
+FORZA_STEER_AXIS = "X"          # AxisIndex 0, Invert=0
+FORZA_THROTTLE_AXIS = "Z"       # AxisIndex 2, Invert=1 → send 1-value
+FORZA_BRAKE_AXIS = "RX"         # AxisIndex 3, Invert=1
+FORZA_CLUTCH_AXIS = "RY"        # AxisIndex 4, Invert=1
+FORZA_HANDBRAKE_AXIS = "RZ"     # AxisIndex 5, Invert=0
+
 OUTPUT_HZ = 120             # how often vJoy is updated (phone sends at 60Hz)
 
 # Steering shaping. The phone already applies your Max Steering Angle, so
@@ -169,6 +178,8 @@ class VJoy:
         d.GetVJDAxisMax.restype = wintypes.BOOL
         d.SetAxis.argtypes = [wintypes.LONG, wintypes.UINT, wintypes.UINT]
         d.SetAxis.restype = wintypes.BOOL
+        d.SetBtn.argtypes = [wintypes.BOOL, wintypes.UINT, ctypes.c_ubyte]
+        d.SetBtn.restype = wintypes.BOOL
 
         if not d.vJoyEnabled():
             raise VJoyError("vJoy driver is not installed or not enabled.")
@@ -183,6 +194,7 @@ class VJoy:
 
         self.max = {}
         self._last = {}
+        self._btn_last = {}
 
     @staticmethod
     def _load_dll():
@@ -220,6 +232,13 @@ class VJoy:
             self.dll.SetAxis(value, self.id, AXIS_USAGE[name])
             self._last[name] = value
         return value
+
+    def set_btn(self, button_id: int, pressed: bool) -> None:
+        """button_id: 1-based button number. Skips redundant writes."""
+        val = bool(pressed)
+        if self._btn_last.get(button_id) != val:
+            self.dll.SetBtn(val, self.id, button_id)
+            self._btn_last[button_id] = val
 
     def close(self) -> None:
         try:
@@ -975,6 +994,10 @@ class ControllerState:
         self.ws = None                  # the connected phone's websocket
         self.ffb_enabled = False        # the phone is in FFB mode
         self.ffb_text = ""              # latest FFB numbers, for the console readout
+        # Forza mode
+        self.forza_mode = FORZA_MODE_DEFAULT
+        self.handbrake = 0.0
+        self.forza_buttons = {}   # button_id (1-based) -> bool
 
 
 controller = ControllerState()
@@ -1043,10 +1066,25 @@ async def output_loop():
             controller.out_brake = approach(controller.out_brake, brk_target, BRAKE_RISE, BRAKE_FALL, dt)
             controller.out_clutch = approach(controller.out_clutch, clt_target, CLUTCH_RISE, CLUTCH_FALL, dt)
 
-            vjoy.set_axis(STEER_AXIS, (controller.out_steer + 1.0) / 2.0)
-            vjoy.set_axis(THROTTLE_AXIS, controller.out_throttle)
-            vjoy.set_axis(BRAKE_AXIS, controller.out_brake)
-            vjoy.set_axis(CLUTCH_AXIS, controller.out_clutch)
+            if controller.forza_mode:
+                # Forza mode: steer normal, pedals inverted (0=full, max=released)
+                vjoy.set_axis(FORZA_STEER_AXIS, (controller.out_steer + 1.0) / 2.0)
+                vjoy.set_axis(FORZA_THROTTLE_AXIS, 1.0 - controller.out_throttle)
+                vjoy.set_axis(FORZA_BRAKE_AXIS, 1.0 - controller.out_brake)
+                vjoy.set_axis(FORZA_CLUTCH_AXIS, 1.0 - controller.out_clutch)
+                if FORZA_HANDBRAKE_AXIS in vjoy.max:
+                    vjoy.set_axis(FORZA_HANDBRAKE_AXIS, controller.handbrake)
+                # Forza buttons (1-based)
+                for btn_id, pressed in controller.forza_buttons.items():
+                    try:
+                        vjoy.set_btn(btn_id, pressed)
+                    except Exception:
+                        pass
+            else:
+                vjoy.set_axis(STEER_AXIS, (controller.out_steer + 1.0) / 2.0)
+                vjoy.set_axis(THROTTLE_AXIS, controller.out_throttle)
+                vjoy.set_axis(BRAKE_AXIS, controller.out_brake)
+                vjoy.set_axis(CLUTCH_AXIS, controller.out_clutch)
         except Exception:
             traceback.print_exc()
 
@@ -1153,12 +1191,23 @@ def release_all_keys() -> None:
         controller.custom_key_states[name] = False
 
 
+def release_all_forza_buttons() -> None:
+    if vjoy:
+        for btn_id in list(controller.forza_buttons.keys()):
+            try:
+                vjoy.set_btn(btn_id, False)
+            except Exception:
+                pass
+    controller.forza_buttons = {}
+
+
 def toggle_injection() -> None:
     controller.injection_enabled = not controller.injection_enabled
     if controller.injection_enabled:
         print(f"\n[{PAUSE_HOTKEY_NAME}] ENGAGED — phone controls the vJoy device")
     else:
         release_all_keys()
+        release_all_forza_buttons()
         print(f"\n[{PAUSE_HOTKEY_NAME}] PAUSED — wheel centered, pedals released")
 
 
@@ -1203,6 +1252,7 @@ async def watchdog():
         if controller.connected_addr and (time.time() - controller.last_update) > WATCHDOG_TIMEOUT:
             print("\n[!] No signal for {:.1f}s — centering wheel and releasing inputs".format(WATCHDOG_TIMEOUT))
             release_all_keys()
+            release_all_forza_buttons()
             controller.connected_addr = None
 
 
@@ -1227,10 +1277,14 @@ async def handle_client(websocket):
 
             if "type" in data:              # a control message from the phone, not a telemetry frame
                 if data["type"] == "config":
-                    wanted = bool(data.get("ffb", False))
-                    if wanted != controller.ffb_enabled:
-                        controller.ffb_enabled = wanted
-                        print(f"\n[FFB] phone switched to {'FORCE FEEDBACK' if wanted else 'NORMAL'} mode")
+                    wanted_ffb = bool(data.get("ffb", False))
+                    if wanted_ffb != controller.ffb_enabled:
+                        controller.ffb_enabled = wanted_ffb
+                        print(f"\n[FFB] phone switched to {'FORCE FEEDBACK' if wanted_ffb else 'NORMAL'} mode")
+                    wanted_forza = bool(data.get("forza", controller.forza_mode))
+                    if wanted_forza != controller.forza_mode:
+                        controller.forza_mode = wanted_forza
+                        print(f"\n[FORZA] Forza mode {'ENABLED' if wanted_forza else 'DISABLED'}")
                 continue
 
             steer = float(data.get("Normalized_Steering", 0.0))
@@ -1242,6 +1296,10 @@ async def handle_client(websocket):
             controller.throttle = float(data.get("Throttle_Value", 1.0 if data.get("Throttle_State", False) else 0.0))
             controller.brake = float(data.get("Brake_Value", 1.0 if data.get("Brake_State", False) else 0.0))
             controller.clutch = float(data.get("Clutch_Value", 1.0 if data.get("Clutch_State", False) else 0.0))
+            controller.handbrake = float(data.get("Handbrake_Value", 1.0 if data.get("Handbrake_State", False) else 0.0))
+            forza_btns = data.get("Forza_Buttons", {})
+            if isinstance(forza_btns, dict):
+                controller.forza_buttons = {int(k): bool(v) for k, v in forza_btns.items() if str(k).isdigit()}
             controller.connected_addr = addr
             controller.last_update = time.time()
 
@@ -1254,12 +1312,17 @@ async def handle_client(websocket):
             else:
                 status = f" PAUSED — press {PAUSE_HOTKEY_NAME} to engage"
 
-            active_keys = ",".join(k for k, v in custom_keys.items() if v) or "-"
+            if controller.forza_mode:
+                active_forza = ",".join(f"B{k}" for k, v in controller.forza_buttons.items() if v) or "-"
+                btn_display = f"FORZA [{active_forza}]"
+            else:
+                active_keys = ",".join(k for k, v in custom_keys.items() if v) or "-"
+                btn_display = f"KEYS [{active_keys}]"
             ffb_text = controller.ffb_text if controller.ffb_enabled else ""
             print(
                 f"\rSTEER {steer:+.2f} -> {controller.out_steer:+.2f}  "
                 f"THR {controller.out_throttle*100:3.0f}%  BRK {controller.out_brake*100:3.0f}%  CLT {controller.out_clutch*100:3.0f}%  "
-                f"KEYS [{active_keys}]{ffb_text}{status}      ",
+                f"{btn_display}{ffb_text}{status}      ",
                 end="", flush=True,
             )
     except websockets.exceptions.ConnectionClosed:
@@ -1267,10 +1330,13 @@ async def handle_client(websocket):
     finally:
         print(f"\n[-] Phone disconnected: {addr}")
         release_all_keys()
+        release_all_forza_buttons()
         controller.connected_addr = None
         if controller.ws is websocket:
             controller.ws = None
             controller.ffb_enabled = False
+            # Reset Forza state
+            controller.handbrake = 0.0
 
 
 # =====================================================================
@@ -1296,8 +1362,12 @@ async def main():
 
     try:
         vjoy = VJoy(VJOY_DEVICE_ID)
-        for axis in {STEER_AXIS, THROTTLE_AXIS, BRAKE_AXIS, CLUTCH_AXIS}:
-            vjoy.init_axis(axis)
+        for axis in {STEER_AXIS, THROTTLE_AXIS, BRAKE_AXIS, CLUTCH_AXIS,
+                     FORZA_THROTTLE_AXIS, FORZA_BRAKE_AXIS, FORZA_CLUTCH_AXIS, FORZA_HANDBRAKE_AXIS}:
+            try:
+                vjoy.init_axis(axis)
+            except VJoyError as e:
+                print(f"  [!] Axis {axis}: {e}")
     except VJoyError as e:
         print(f"ERROR: {e}")
         sys.exit(1)
@@ -1313,6 +1383,14 @@ async def main():
     vjoy.set_axis(THROTTLE_AXIS, 0.0)
     vjoy.set_axis(BRAKE_AXIS, 0.0)
     vjoy.set_axis(CLUTCH_AXIS, 0.0)
+    # Also initialise Forza axes to their "released" state (inverted: 1.0 = released for pedals)
+    try:
+        vjoy.set_axis(FORZA_THROTTLE_AXIS, 1.0)
+        vjoy.set_axis(FORZA_BRAKE_AXIS, 1.0)
+        vjoy.set_axis(FORZA_CLUTCH_AXIS, 1.0)
+        vjoy.set_axis(FORZA_HANDBRAKE_AXIS, 0.0)
+    except Exception:
+        pass
 
     # Force feedback is optional: if it can't start, steering and pedals still work.
     ffb_bridge = VJoyFfb(vjoy, ffb_engine)
@@ -1354,5 +1432,6 @@ if __name__ == "__main__":
         print("\nShutting down...")
     finally:
         release_all_keys()
+        release_all_forza_buttons()
         if vjoy:
             vjoy.close()
