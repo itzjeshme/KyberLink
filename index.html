@@ -544,8 +544,8 @@
     const size = Math.floor(Math.min(w, h) * 0.86);
     wheelOuter.style.width = size + "px";
     wheelOuter.style.height = size + "px";
-    wheelRim.setAttribute("width", size);
-    wheelRim.setAttribute("height", size);
+    wheelRim.style.width = size + "px";
+    wheelRim.style.height = size + "px";
   }
   window.addEventListener("resize", sizeWheel);
   window.addEventListener("orientationchange", ()=>setTimeout(sizeWheel, 60));
@@ -660,22 +660,6 @@
      so a finger drifting slightly off the button edge
      doesn't release it early.
      ==================================================== */
-  function animateValue(el, start, end, duration, callback){
-    let startTime = null;
-    function step(timestamp) {
-      if (!startTime) startTime = timestamp;
-      const progress = Math.min((timestamp - startTime) / duration, 1);
-      const easedProgress = 1 - Math.pow(1 - progress, 3); // easeOutCubic
-      const currentValue = start + (end - start) * easedProgress;
-      el.style.height = (currentValue * 100) + "%";
-      if (callback) callback(currentValue);
-      if (progress < 1) {
-        requestAnimationFrame(step);
-      }
-    }
-    requestAnimationFrame(step);
-  }
-
   function setupPedal(el, fillEl, key, modeKey){
     let pid = null;
     let currentVal = 0;
@@ -683,20 +667,16 @@
     let animationFrame = null;
 
     function updateLoop(){
-      if(currentVal !== targetVal){
-        // Smoothly approach targetVal
-        const diff = targetVal - currentVal;
-        if(Math.abs(diff) < 0.001){
-          currentVal = targetVal;
-          fillEl.style.height = (currentVal * 100) + "%";
-        } else {
-          currentVal += diff * 0.2; // simple smoothing
-          fillEl.style.height = (currentVal * 100) + "%";
-        }
+      const diff = targetVal - currentVal;
+      if(Math.abs(diff) < 0.001){
+        currentVal = targetVal;
+        fillEl.style.height = (currentVal * 100) + "%";
+        animationFrame = null;
+        return;
       }
-      if(animationFrame){
-        animationFrame = requestAnimationFrame(updateLoop);
-      }
+      currentVal += diff * 0.2;
+      fillEl.style.height = (currentVal * 100) + "%";
+      animationFrame = requestAnimationFrame(updateLoop);
     }
 
     function startUpdateLoop(){
@@ -994,6 +974,9 @@
     }, 2000);
   }
 
+  let _lastSentPayload = "";
+  let _lastSendTime = 0;
+
   /* Builds and sends one telemetry packet right now. Called on a steady
      60Hz interval for the continuous steering signal, AND immediately
      from every pedal/button press or release — discrete on/off changes
@@ -1018,7 +1001,13 @@
         payload.Handbrake_State = !!state.handbrake;
         payload.Forza_Buttons = state.forzaButtons || {};
       }
-      try{ state.ws.send(JSON.stringify(payload)); }catch(e){}
+      const str = JSON.stringify(payload);
+      const now = performance.now();
+      if(str !== _lastSentPayload || now - _lastSendTime > 500){
+        _lastSentPayload = str;
+        _lastSendTime = now;
+        try{ state.ws.send(str); }catch(e){}
+      }
     }
   }
 
@@ -1176,7 +1165,7 @@
       phys.target = clamp(clamp(phys.target, -half, half), state.rotation - FFB_MAX_LEAD, state.rotation + FFB_MAX_LEAD);
     }
     const aim = clamp(phys.target + FFB_SLIP * (force + (phys.cf || 0)), -half, half);   // the wheel gives a little under force
-    const n = Math.max(1, Math.ceil(dt / 0.004)), h = dt / n;
+    const n = Math.min(8, Math.max(1, Math.ceil(dt / 0.004))), h = dt / n;
     for(let i = 0; i < n; i++) physicsStep(h, force, conds, aim);
     if(!isFinite(state.rotation) || !isFinite(phys.w)){ state.rotation = 0; phys.w = 0; phys.a = 0; }
 

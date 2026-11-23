@@ -39,6 +39,7 @@ mode also tick "Enable Effects" (and the effects you want) under Force Feedback 
 import asyncio
 import ctypes
 import functools
+import gzip as _gzip_mod
 import http.server
 import json
 import math
@@ -52,6 +53,16 @@ import traceback
 from ctypes import wintypes
 from pathlib import Path
 from typing import NamedTuple
+
+try:
+    import orjson
+    _loads = orjson.loads
+    _dumps = lambda obj: orjson.dumps(obj).decode()
+    _dumps_compact = _dumps           # orjson always produces compact output
+except ImportError:
+    _loads = json.loads
+    _dumps = json.dumps
+    _dumps_compact = lambda obj: json.dumps(obj, separators=(",", ":"))
 
 try:
     from pynput.keyboard import Controller as KeyboardController, Key
@@ -78,6 +89,7 @@ _SPECIAL_KEYS = {
 }
 
 
+@functools.lru_cache(maxsize=64)
 def resolve_key(name: str):
     name = (name or "").strip().lower()
     if not name:
@@ -1003,6 +1015,7 @@ class ControllerState:
 controller = ControllerState()
 
 
+@functools.lru_cache(maxsize=1)
 def get_local_ip() -> str:
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
@@ -1036,9 +1049,16 @@ def approach(cur: float, target: float, rise: float, fall: float, dt: float) -> 
 # =====================================================================
 
 async def output_loop():
-    last = time.perf_counter()
+    interval = 1.0 / OUTPUT_HZ
+    next_tick = time.perf_counter()
+    last = next_tick
     while True:
-        await asyncio.sleep(1.0 / OUTPUT_HZ)
+        next_tick += interval
+        delay = next_tick - time.perf_counter()
+        if delay > 0:
+            await asyncio.sleep(delay)
+        else:
+            next_tick = time.perf_counter()
         now = time.perf_counter()
         dt = now - last
         last = now
@@ -1095,7 +1115,7 @@ async def output_loop():
 
 def ffb_status_message() -> str:
     ok = ffb_bridge is not None and ffb_bridge.ok
-    return json.dumps({
+    return _dumps({
         "type": "ffb_status",
         "available": ok,
         "reason": "" if ok else (ffb_bridge.reason if ffb_bridge else "force feedback was not started"),
@@ -1114,10 +1134,16 @@ def _cond_for_phone(c: list) -> list:
 async def ffb_loop():
     """While the phone is in FFB mode: sample the effect engine and stream the result to it."""
     period = 1.0 / FFB_HZ
+    next_tick = time.perf_counter()
     last_live = False
     last_status = None
     while True:
-        await asyncio.sleep(period)
+        next_tick += period
+        delay = next_tick - time.perf_counter()
+        if delay > 0:
+            await asyncio.sleep(delay)
+        else:
+            next_tick = time.perf_counter()
         try:
             s = ffb_engine.sample(time.perf_counter())
             ws = controller.ws
@@ -1156,7 +1182,7 @@ async def ffb_loop():
             if live or last_live:                       # silent while idle; one final all-zero message tells the phone to stop
                 msg = {"type": "ffb", "f": force, "v": vib, "n": len(s.types), "t": s.types,
                        "c": [_cond_for_phone(c) for c in s.conds]}
-                await ws.send(json.dumps(msg, separators=(",", ":")))
+                await ws.send(_dumps_compact(msg))
                 last_live = live
         except websockets.exceptions.ConnectionClosed:
             last_live, last_status = False, None
@@ -1249,7 +1275,7 @@ def start_hotkey_listener() -> None:
 async def watchdog():
     while True:
         await asyncio.sleep(0.1)
-        if controller.connected_addr and (time.time() - controller.last_update) > WATCHDOG_TIMEOUT:
+        if controller.connected_addr and (time.perf_counter() - controller.last_update) > WATCHDOG_TIMEOUT:
             print("\n[!] No signal for {:.1f}s — centering wheel and releasing inputs".format(WATCHDOG_TIMEOUT))
             release_all_keys()
             release_all_forza_buttons()
@@ -1262,15 +1288,20 @@ async def watchdog():
 
 async def handle_client(websocket):
     addr = websocket.remote_address
+    if controller.ws is not None:
+        print(f"\n[!] Rejecting connection from {addr} — another phone is already connected")
+        await websocket.close(4001, "Another phone is already connected")
+        return
     print(f"\n[+] Phone connected: {addr}")
     controller.connected_addr = addr
     controller.ws = websocket
     controller.ffb_enabled = False      # until this phone says otherwise (it sends its mode right after connecting)
+    _print_skip = 0
     try:
         async for message in websocket:
             try:
-                data = json.loads(message)
-            except json.JSONDecodeError:
+                data = _loads(message)
+            except (json.JSONDecodeError, ValueError):
                 continue
             if not isinstance(data, dict):
                 continue
@@ -1301,7 +1332,7 @@ async def handle_client(websocket):
             if isinstance(forza_btns, dict):
                 controller.forza_buttons = {int(k): bool(v) for k, v in forza_btns.items() if str(k).isdigit()}
             controller.connected_addr = addr
-            controller.last_update = time.time()
+            controller.last_update = time.perf_counter()
 
             if controller.injection_enabled:
                 try:
@@ -1319,12 +1350,14 @@ async def handle_client(websocket):
                 active_keys = ",".join(k for k, v in custom_keys.items() if v) or "-"
                 btn_display = f"KEYS [{active_keys}]"
             ffb_text = controller.ffb_text if controller.ffb_enabled else ""
-            print(
-                f"\rSTEER {steer:+.2f} -> {controller.out_steer:+.2f}  "
-                f"THR {controller.out_throttle*100:3.0f}%  BRK {controller.out_brake*100:3.0f}%  CLT {controller.out_clutch*100:3.0f}%  "
-                f"{btn_display}{ffb_text}{status}      ",
-                end="", flush=True,
-            )
+            _print_skip += 1
+            if _print_skip % 15 == 0:
+                print(
+                    f"\rSTEER {steer:+.2f} -> {controller.out_steer:+.2f}  "
+                    f"THR {controller.out_throttle*100:3.0f}%  BRK {controller.out_brake*100:3.0f}%  CLT {controller.out_clutch*100:3.0f}%  "
+                    f"{btn_display}{ffb_text}{status}      ",
+                    end="", flush=True,
+                )
     except websockets.exceptions.ConnectionClosed:
         pass
     finally:
@@ -1340,12 +1373,58 @@ async def handle_client(websocket):
 
 
 # =====================================================================
-# Static file server
+# Static file server — in-memory cache with gzip + Cache-Control
 # =====================================================================
 
+class _CachedHTTPHandler(http.server.BaseHTTPRequestHandler):
+    """Serves index.html and favicon.ico from memory with gzip and Cache-Control."""
+    _cache: dict = {}
+
+    @classmethod
+    def load_cache(cls, directory: Path):
+        _TYPES = {'.html': 'text/html; charset=utf-8', '.ico': 'image/x-icon'}
+        for name in ("index.html", "favicon.ico"):
+            path = directory / name
+            if not path.exists():
+                continue
+            raw = path.read_bytes()
+            ct = _TYPES.get(path.suffix, 'application/octet-stream')
+            try:
+                gz = _gzip_mod.compress(raw, compresslevel=9)
+            except Exception:
+                gz = None
+            cls._cache[f"/{name}"] = (raw, gz, ct)
+            if name == "index.html":
+                cls._cache["/"] = (raw, gz, ct)
+
+    def do_GET(self):
+        path = self.path.split("?")[0].split("#")[0]
+        entry = self._cache.get(path)
+        if entry is None:
+            self.send_error(404)
+            return
+        raw, gz, ct = entry
+        ae = self.headers.get("Accept-Encoding", "")
+        if gz and "gzip" in ae:
+            body = gz
+            self.send_response(200)
+            self.send_header("Content-Encoding", "gzip")
+        else:
+            body = raw
+            self.send_response(200)
+        self.send_header("Content-Type", ct)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "max-age=3600")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, format, *args):
+        pass  # suppress per-request access logs
+
+
 def start_http_server(directory: Path) -> http.server.ThreadingHTTPServer:
-    handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=str(directory))
-    httpd = http.server.ThreadingHTTPServer(("0.0.0.0", HTTP_PORT), handler)
+    _CachedHTTPHandler.load_cache(directory)
+    httpd = http.server.ThreadingHTTPServer(("0.0.0.0", HTTP_PORT), _CachedHTTPHandler)
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     return httpd
 
@@ -1421,7 +1500,7 @@ async def main():
     asyncio.create_task(output_loop())
     asyncio.create_task(watchdog())
     asyncio.create_task(ffb_loop())
-    async with websockets.serve(handle_client, "0.0.0.0", WS_PORT, max_size=None):
+    async with websockets.serve(handle_client, "0.0.0.0", WS_PORT, max_size=4096, ping_interval=5, ping_timeout=3):
         await asyncio.Future()
 
 
@@ -1435,3 +1514,7 @@ if __name__ == "__main__":
         release_all_forza_buttons()
         if vjoy:
             vjoy.close()
+        try:
+            ctypes.windll.winmm.timeEndPeriod(1)
+        except Exception:
+            pass
