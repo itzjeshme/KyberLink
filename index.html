@@ -269,6 +269,61 @@
   #ffb-status.ffb-warn{ color:var(--amber); }
   #ffb-status.ffb-bad{ color:var(--red-glow); }
 
+  /* ---------- FFB Effects List ---------- */
+  .ffb-effects-header{
+    display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;
+  }
+  .ffb-effects-actions{
+    display:flex; gap:6px;
+  }
+  .ffb-action-btn{
+    background:var(--bg-2); border:1px solid var(--line); color:var(--text-1);
+    font-family:var(--mono); font-size:10px; padding:3px 8px; border-radius:4px; cursor:pointer;
+  }
+  .ffb-action-btn:active{
+    border-color:var(--amber); color:var(--amber);
+  }
+  #ffb-effects-container{
+    display:flex; flex-direction:column; gap:4px; margin-bottom:8px;
+  }
+  .ffb-effect-item{
+    display:flex; align-items:center; justify-content:space-between;
+    background:var(--bg-2); border:1px solid transparent; border-radius:5px; padding:7px 10px;
+    transition:border-color .15s;
+  }
+  .ffb-effect-item.effect-active{
+    border-color:var(--amber-dim);
+  }
+  .ffb-effect-meta{
+    display:flex; flex-direction:column; gap:2px; min-width:0; padding-right:8px;
+  }
+  .ffb-effect-title-row{
+    display:flex; align-items:center; gap:6px;
+  }
+  .ffb-effect-title{
+    font-family:var(--mono); font-size:11px; font-weight:700; color:var(--text-0); letter-spacing:.03em;
+  }
+  .ffb-effect-pill{
+    font-family:var(--mono); font-size:9px; padding:1px 5px; border-radius:3px;
+    background:rgba(255,106,0,.15); color:var(--amber); border:1px solid var(--amber-dim); display:none;
+  }
+  .ffb-effect-item.effect-active .ffb-effect-pill{
+    display:inline-block;
+  }
+  .ffb-effect-desc{
+    font-family:var(--mono); font-size:9.5px; color:var(--text-1); opacity:.75; line-height:1.2;
+  }
+  .ffb-effect-toggles{
+    display:flex; gap:2px; background:var(--bg-0); padding:2px; border-radius:4px; flex:0 0 auto;
+  }
+  .ffb-effect-toggle-btn{
+    border:none; background:none; color:var(--text-1);
+    font-family:var(--mono); font-size:10px; padding:4px 8px; border-radius:3px; cursor:pointer;
+  }
+  .ffb-effect-toggle-btn.selected{
+    background:var(--bg-1); color:var(--amber); box-shadow:0 0 0 1px var(--amber-dim); font-weight:700;
+  }
+
   #close-drawer{
     width:100%; margin-top:18px; background:none; border:1px solid var(--line); color:var(--text-1);
     font-family:var(--sans); font-weight:600; font-size:12px; letter-spacing:.06em; padding:10px 0; border-radius:5px;
@@ -403,6 +458,18 @@
         <input type="range" id="ffb-slider" min="25" max="300" step="5" value="100">
         <div class="hint-text">Let go of the slider to feel a test buzz.</div>
 
+        <div class="ffb-gap">
+          <div class="ffb-effects-header">
+            <span class="drawer-label" style="margin-bottom:0;">Vibration effects</span>
+            <div class="ffb-effects-actions">
+              <button type="button" class="ffb-action-btn" id="ffb-all-on">ALL ON</button>
+              <button type="button" class="ffb-action-btn" id="ffb-all-off">ALL OFF</button>
+            </div>
+          </div>
+          <div class="hint-text" style="margin-top:2px; margin-bottom:8px;">Choose which force feedback effects trigger phone vibration:</div>
+          <div id="ffb-effects-container"></div>
+        </div>
+
         <div id="ffb-status" class="hint-text ffb-gap"></div>
         <div id="ffb-live" class="hint-text"></div>
       </div>
@@ -487,6 +554,20 @@
     ffbStrength: 1.0,      // vibration strength multiplier from the settings slider
     ffbForce: 1.0,         // how hard the game's force pulls the wheel (settings slider)
     ffbInvert: false,      // flip the direction of the game's force
+    ffbEffects: {          // which FFB effects trigger vibration (true = on, false = off)
+      "1": true,       // Constant Force
+      "2": true,       // Ramp Force
+      "4": true,       // Sine Wave
+      "3": true,       // Square Wave
+      "5": true,       // Triangle Wave
+      "6": true,       // Sawtooth Up
+      "7": true,       // Sawtooth Down
+      "8": true,       // Spring
+      "9": true,       // Damper
+      "10": true,      // Inertia
+      "11": true,      // Friction
+      "texture": true, // Road Texture / Bumps
+    },
     ffbAvailable: null,    // set by the PC: can it do force feedback at all?
     ffbSeen: false,        // has the game sent any force feedback yet?
     ffbReason: "", ffbHint: "",
@@ -1052,9 +1133,101 @@
   const ffbBadge   = $("ffb-badge"),   ffbOptions  = $("ffb-options"), ffbDrawer = $("drawer"),
         ffbSlider  = $("ffb-slider"),  ffbReadout  = $("ffb-readout"),
         ffbfSlider = $("ffbf-slider"), ffbfReadout = $("ffbf-readout"),
-        ffbStatus  = $("ffb-status"),  ffbLive     = $("ffb-live");
+        ffbStatus  = $("ffb-status"),  ffbLive     = $("ffb-live"),
+        ffbEffectsContainer = $("ffb-effects-container"),
+        ffbAllOnBtn = $("ffb-all-on"), ffbAllOffBtn = $("ffb-all-off");
   const ffbModeBtns = [...document.querySelectorAll("#ffb-mode-group .mode-toggle-btn")];
   const ffbDirBtns  = [...document.querySelectorAll("#ffb-dir-group .mode-toggle-btn")];
+
+  const FFB_EFFECT_DEFINITIONS = [
+    { id: "1", name: "CONSTANT FORCE", desc: "Cornering load & steady steering rack pull" },
+    { id: "2", name: "RAMP FORCE", desc: "Gradually changing steering force" },
+    { id: "4", name: "SINE WAVE", desc: "Smooth periodic vibration & rumble strips" },
+    { id: "3", name: "SQUARE WAVE", desc: "Sharp, high-impact periodic vibration" },
+    { id: "5", name: "TRIANGLE WAVE", desc: "Linear periodic oscillation" },
+    { id: "6", name: "SAWTOOTH UP", desc: "Periodic waveform ramping up" },
+    { id: "7", name: "SAWTOOTH DOWN", desc: "Periodic waveform ramping down" },
+    { id: "8", name: "SPRING", desc: "Centering resistance pull" },
+    { id: "9", name: "DAMPER", desc: "Resistance to wheel rotation speed" },
+    { id: "10", name: "INERTIA", desc: "Resistance to wheel acceleration" },
+    { id: "11", name: "FRICTION", desc: "Mechanical & tyre scrubbing friction" },
+    { id: "texture", name: "ROAD TEXTURE", desc: "Road bumps, kerbs, surface chatter & slip" }
+  ];
+
+  function renderFfbEffectsUI(){
+    if(!ffbEffectsContainer) return;
+    ffbEffectsContainer.innerHTML = "";
+    FFB_EFFECT_DEFINITIONS.forEach(def => {
+      const isOn = state.ffbEffects[def.id] !== false;
+      const row = document.createElement("div");
+      row.className = "ffb-effect-item";
+      row.dataset.id = def.id;
+      row.innerHTML = `
+        <div class="ffb-effect-meta">
+          <div class="ffb-effect-title-row">
+            <span class="ffb-effect-title">${def.name}</span>
+            <span class="ffb-effect-pill">ACTIVE</span>
+          </div>
+          <span class="ffb-effect-desc">${def.desc}</span>
+        </div>
+        <div class="ffb-effect-toggles">
+          <button type="button" class="ffb-effect-toggle-btn ${!isOn ? 'selected' : ''}" data-val="0">OFF</button>
+          <button type="button" class="ffb-effect-toggle-btn ${isOn ? 'selected' : ''}" data-val="1">ON</button>
+        </div>
+      `;
+      const offBtn = row.querySelector('.ffb-effect-toggle-btn[data-val="0"]');
+      const onBtn = row.querySelector('.ffb-effect-toggle-btn[data-val="1"]');
+
+      offBtn.addEventListener("click", (e)=>{
+        e.preventDefault();
+        state.ffbEffects[def.id] = false;
+        offBtn.classList.add("selected");
+        onBtn.classList.remove("selected");
+        saveFfbEffects();
+        sendConfig();
+      });
+
+      onBtn.addEventListener("click", (e)=>{
+        e.preventDefault();
+        state.ffbEffects[def.id] = true;
+        onBtn.classList.add("selected");
+        offBtn.classList.remove("selected");
+        saveFfbEffects();
+        sendConfig();
+        vibrate(15);
+      });
+
+      ffbEffectsContainer.appendChild(row);
+    });
+  }
+
+  function saveFfbEffects(){
+    try{ localStorage.setItem("kyberlink_ffb_effects", JSON.stringify(state.ffbEffects)); }catch(e){}
+  }
+
+  function setAllFfbEffects(val){
+    FFB_EFFECT_DEFINITIONS.forEach(def => {
+      state.ffbEffects[def.id] = val;
+    });
+    if(ffbEffectsContainer){
+      const items = ffbEffectsContainer.querySelectorAll(".ffb-effect-item");
+      items.forEach(item => {
+        const offBtn = item.querySelector('.ffb-effect-toggle-btn[data-val="0"]');
+        const onBtn = item.querySelector('.ffb-effect-toggle-btn[data-val="1"]');
+        if(offBtn && onBtn){
+          offBtn.classList.toggle("selected", !val);
+          onBtn.classList.toggle("selected", val);
+        }
+      });
+    }
+    saveFfbEffects();
+    sendConfig();
+    if(val) vibrate(25);
+    else haptics.silence();
+  }
+
+  if(ffbAllOnBtn) ffbAllOnBtn.addEventListener("click", () => setAllFfbEffects(true));
+  if(ffbAllOffBtn) ffbAllOffBtn.addEventListener("click", () => setAllFfbEffects(false));
 
   const NO_CONDS = [];
   const ffbIn = { force: 0, vib: 0, conds: NO_CONDS, types: [], stamp: 0 };   // the latest message from the PC
@@ -1209,6 +1382,16 @@
       if(parts.length) condStr = " · " + parts.join(", ");
     }
     ffbLive.textContent = `force ${f >= 0 ? "+" : ""}${f.toFixed(2)}${condStr} · shake ${Math.round(v * 100)}% · ${names || "no effects playing"}`;
+
+    if(ffbEffectsContainer){
+      const activeTypes = new Set(fresh ? ffbIn.types.map(String) : []);
+      const items = ffbEffectsContainer.querySelectorAll(".ffb-effect-item");
+      items.forEach(item => {
+        const id = item.dataset.id;
+        const isActive = activeTypes.has(id) || (id === "texture" && fresh && Math.abs(f) > 0.05);
+        item.classList.toggle("effect-active", isActive);
+      });
+    }
   }
 
   function sendConfig(){
@@ -1217,7 +1400,8 @@
         state.ws.send(JSON.stringify({
           type: "config",
           ffb: state.ffbMode,
-          forza: state.forzaMode
+          forza: state.forzaMode,
+          ffb_effects: state.ffbEffects
         }));
       }catch(e){}
     }
@@ -1290,7 +1474,20 @@
       ffbIn.conds = Array.isArray(m.c) ? m.c.filter(c => Array.isArray(c) && c.length >= 7 && c.every(Number.isFinite)) : NO_CONDS;
       ffbIn.types = Array.isArray(m.t) ? m.t : [];
       ffbIn.stamp = performance.now();
-      haptics.set(Math.pow(clamp(ffbIn.vib * state.ffbStrength, 0, 1), FFB_CURVE));
+
+      let vibLevel = ffbIn.vib;
+      if(state.ffbEffects){
+        if(ffbIn.types.length > 0){
+          const anyActiveVibOn = ffbIn.types.some(t => state.ffbEffects[t] !== false && state.ffbEffects[String(t)] !== false);
+          const textureOn = state.ffbEffects["texture"] !== false;
+          if(!anyActiveVibOn && !textureOn){
+            vibLevel = 0;
+          }
+        } else if(state.ffbEffects["texture"] === false && state.ffbEffects["1"] === false){
+          vibLevel = 0;
+        }
+      }
+      haptics.set(Math.pow(clamp(vibLevel * state.ffbStrength, 0, 1), FFB_CURVE));
     }else if(m.type === "ffb_status"){
       state.ffbAvailable = !!m.available;
       state.ffbReason = m.reason || "";
@@ -1395,7 +1592,15 @@
       if(!isNaN(savedStrength) && savedStrength >= 25 && savedStrength <= 300){
         ffbSlider.value = savedStrength; ffbReadout.textContent = savedStrength + "%"; state.ffbStrength = savedStrength / 100;
       }
+      const savedEffects = localStorage.getItem("kyberlink_ffb_effects");
+      if(savedEffects){
+        const parsed = JSON.parse(savedEffects);
+        if(parsed && typeof parsed === "object"){
+          Object.assign(state.ffbEffects, parsed);
+        }
+      }
     }catch(e){}
+    renderFfbEffectsUI();
 
     const ffbs = parseInt(params.get("ffbs"), 10);
     if(!isNaN(ffbs) && ffbs >= 25 && ffbs <= 300){

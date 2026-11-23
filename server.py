@@ -551,10 +551,21 @@ class FfbEngine:
 
     # ---- sampling (asyncio thread) ----------------------------------------
 
-    def sample(self, now: float) -> FfbSample:
+    def sample(self, now: float, enabled_effects: dict = None) -> FfbSample:
         with self._lock:
             dt = _clamp(now - self._t_last, 0.001, 0.1)
             self._t_last = now
+
+            if enabled_effects is None:
+                enabled_effects = {}
+
+            def is_vib_on(key):
+                k_str = str(key)
+                if k_str in enabled_effects:
+                    return bool(enabled_effects[k_str])
+                if key in enabled_effects:
+                    return bool(enabled_effects[key])
+                return True
 
             # If an effect is receiving updates from the game, it is actively playing
             for fx in self._fx.values():
@@ -577,16 +588,33 @@ class FfbEngine:
                 if not fx.playing:                        # a finite effect just ended
                     continue
                 force += f
-                vib += v
-                if abs(f) > 1e-4 or fx.const != 0.0:
-                    types.add(ET_CONST)
+
+                et = fx.etype
+                if abs(f) > 1e-4 or fx.const != 0.0 or fx.ramp != (0.0, 0.0):
+                    if et in (ET_CONST, ET_RAMP):
+                        types.add(et)
+                    elif fx.ramp != (0.0, 0.0):
+                        types.add(ET_RAMP)
+                    else:
+                        types.add(ET_CONST)
+
                 if v > 1e-4:
-                    types.add(fx.etype if fx.etype in PERIODIC_EFFECTS else ET_SINE)
+                    pet = et if et in PERIODIC_EFFECTS else ET_SINE
+                    types.add(pet)
+                    if is_vib_on(pet):
+                        vib += v
+
                 if cond is not None:
                     kind, centre, kp, kn, sp, sn, dead = cond
                     conds.append([kind, centre, kp * gc, kn * gc,
                                   (sp if sp > 0 else 1.0) * gc, (sn if sn > 0 else 1.0) * gc, dead])
-                    types.add(fx.etype if fx.etype in CONDITION_EFFECTS else ET_DMPR)
+                    cet = et if et in CONDITION_EFFECTS else ET_DMPR
+                    types.add(cet)
+                    if is_vib_on(cet):
+                        c_strength = max(abs(kp), abs(kn))
+                        if c_strength > 0.05:
+                            vib += min(0.3, c_strength * 0.25)
+
             if not types:                                 # everything that was playing has just ended
                 self._idle, self._tex = True, 0.0
                 return FfbSample(0.0, 0.0, [], [])
@@ -600,7 +628,20 @@ class FfbEngine:
             self._lp += (force - self._lp) * (1.0 - math.exp(-dt / _TEXTURE_TAU))
             tex = min(1.0, tex)
             self._tex += (tex - self._tex) * (1.0 - math.exp(-dt / (0.02 if tex > self._tex else 0.08)))
-            vib = min(1.0, vib + self._tex + FFB_LOAD_VIBRATION * abs(self._lp))
+
+            extra_vib = 0.0
+            if is_vib_on("texture") and is_vib_on("0"):
+                extra_vib += self._tex
+
+            load_vib = FFB_LOAD_VIBRATION * abs(self._lp)
+            force_active = [t for t in types if t in (ET_CONST, ET_RAMP)]
+            if force_active:
+                if any(is_vib_on(t) for t in force_active):
+                    extra_vib += load_vib
+            elif is_vib_on(ET_CONST):
+                extra_vib += load_vib
+
+            vib = min(1.0, vib + extra_vib)
             return FfbSample(force, vib, conds, sorted(types))
 
     @staticmethod
@@ -1005,6 +1046,7 @@ class ControllerState:
         # force feedback (see the FFB sections)
         self.ws = None                  # the connected phone's websocket
         self.ffb_enabled = False        # the phone is in FFB mode
+        self.ffb_effects = {}           # effect_id -> bool (which effects vibrate)
         self.ffb_text = ""              # latest FFB numbers, for the console readout
         # Forza mode
         self.forza_mode = FORZA_MODE_DEFAULT
@@ -1145,7 +1187,7 @@ async def ffb_loop():
         else:
             next_tick = time.perf_counter()
         try:
-            s = ffb_engine.sample(time.perf_counter())
+            s = ffb_engine.sample(time.perf_counter(), controller.ffb_effects)
             ws = controller.ws
             if ws is None or not controller.ffb_enabled:
                 controller.ffb_text = ""
@@ -1296,6 +1338,7 @@ async def handle_client(websocket):
     controller.connected_addr = addr
     controller.ws = websocket
     controller.ffb_enabled = False      # until this phone says otherwise (it sends its mode right after connecting)
+    controller.ffb_effects = {}
     _print_skip = 0
     try:
         async for message in websocket:
@@ -1316,6 +1359,8 @@ async def handle_client(websocket):
                     if wanted_forza != controller.forza_mode:
                         controller.forza_mode = wanted_forza
                         print(f"\n[FORZA] Forza mode {'ENABLED' if wanted_forza else 'DISABLED'}")
+                    if "ffb_effects" in data and isinstance(data["ffb_effects"], dict):
+                        controller.ffb_effects = {str(k): bool(v) for k, v in data["ffb_effects"].items()}
                 continue
 
             steer = float(data.get("Normalized_Steering", 0.0))
@@ -1368,6 +1413,7 @@ async def handle_client(websocket):
         if controller.ws is websocket:
             controller.ws = None
             controller.ffb_enabled = False
+            controller.ffb_effects = {}
             # Reset Forza state
             controller.handbrake = 0.0
 
