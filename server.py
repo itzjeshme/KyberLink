@@ -1423,20 +1423,26 @@ async def handle_client(websocket):
 # =====================================================================
 
 class _CachedHTTPHandler(http.server.BaseHTTPRequestHandler):
-    """Serves index.html and favicon.ico from memory with gzip and Cache-Control."""
+    """Serves index.html, favicon.ico, wheel.png, and static assets from memory with gzip and Cache-Control."""
     _cache: dict = {}
 
     @classmethod
     def load_cache(cls, directory: Path):
-        _TYPES = {'.html': 'text/html; charset=utf-8', '.ico': 'image/x-icon'}
-        for name in ("index.html", "favicon.ico"):
+        _TYPES = {
+            '.html': 'text/html; charset=utf-8',
+            '.ico': 'image/x-icon',
+            '.png': 'image/png',
+            '.webp': 'image/webp',
+            '.svg': 'image/svg+xml',
+        }
+        for name in ("index.html", "favicon.ico", "wheel.png"):
             path = directory / name
             if not path.exists():
                 continue
             raw = path.read_bytes()
             ct = _TYPES.get(path.suffix, 'application/octet-stream')
             try:
-                gz = _gzip_mod.compress(raw, compresslevel=9)
+                gz = _gzip_mod.compress(raw, compresslevel=9) if path.suffix in ('.html', '.svg') else None
             except Exception:
                 gz = None
             cls._cache[f"/{name}"] = (raw, gz, ct)
@@ -1447,8 +1453,22 @@ class _CachedHTTPHandler(http.server.BaseHTTPRequestHandler):
         path = self.path.split("?")[0].split("#")[0]
         entry = self._cache.get(path)
         if entry is None:
-            self.send_error(404)
-            return
+            # Fallback to loading static asset directly from disk if it exists
+            file_path = (Path(__file__).resolve().parent / path.lstrip("/")).resolve()
+            if file_path.is_file() and file_path.parent == Path(__file__).resolve().parent:
+                _TYPES = {
+                    '.html': 'text/html; charset=utf-8',
+                    '.ico': 'image/x-icon',
+                    '.png': 'image/png',
+                    '.webp': 'image/webp',
+                    '.svg': 'image/svg+xml',
+                }
+                raw = file_path.read_bytes()
+                ct = _TYPES.get(file_path.suffix, 'application/octet-stream')
+                entry = self._cache[path] = (raw, None, ct)
+            else:
+                self.send_error(404)
+                return
         raw, gz, ct = entry
         ae = self.headers.get("Accept-Encoding", "")
         if gz and "gzip" in ae:

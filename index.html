@@ -376,15 +376,25 @@
               <stop offset="0%" stop-color="#3a3f46"/>
               <stop offset="100%" stop-color="#1a1c1f"/>
             </linearGradient>
+            <radialGradient id="rimSheen" cx="40%" cy="35%" r="75%">
+              <stop offset="0%" stop-color="#ffffff" stop-opacity="0.28"/>
+              <stop offset="50%" stop-color="#5a616a" stop-opacity="0.10"/>
+              <stop offset="85%" stop-color="#000000" stop-opacity="0.25"/>
+              <stop offset="100%" stop-color="#000000" stop-opacity="0.55"/>
+            </radialGradient>
+            <mask id="wheelMask" mask-type="alpha" style="mask-type:alpha;">
+              <image href="wheel.png" xlink:href="wheel.png" x="0" y="0" width="260" height="260" preserveAspectRatio="xMidYMid meet"/>
+            </mask>
           </defs>
-          <circle cx="130" cy="130" r="124" fill="url(#rimGrad)" stroke="#0e0f10" stroke-width="2"/>
-          <circle cx="130" cy="130" r="98" fill="var(--bg-0)"/>
+
+          <!-- Custom steering wheel image -->
+          <image id="wheel-image" href="wheel.png" xlink:href="wheel.png" x="0" y="0" width="260" height="260" preserveAspectRatio="xMidYMid meet"/>
+
+          <!-- Brushed metallic gradient overlay over wheel -->
+          <rect x="0" y="0" width="260" height="260" fill="url(#rimGrad)" mask="url(#wheelMask)" style="mix-blend-mode:overlay; opacity:0.65; pointer-events:none;"/>
+          <rect x="0" y="0" width="260" height="260" fill="url(#rimSheen)" mask="url(#wheelMask)" style="mix-blend-mode:soft-light; pointer-events:none;"/>
+
           <g id="ticks"></g>
-          <!-- spokes -->
-          <path d="M 130 130 L 60 168 M 130 130 L 200 168 M 130 130 L 130 60" stroke="#2c3036" stroke-width="14" stroke-linecap="round"/>
-          <path d="M 130 130 L 60 168 M 130 130 L 200 168 M 130 130 L 130 60" stroke="#454b53" stroke-width="14" stroke-linecap="round" opacity="0.35" transform="translate(-2,-2)"/>
-          <circle cx="130" cy="130" r="46" fill="url(#hubGrad)" stroke="#0e0f10" stroke-width="2"/>
-          <circle cx="130" cy="130" r="3" fill="var(--amber)"/>
         </svg>
         <div id="hub-readout">
           <div id="hub-angle">0°</div>
