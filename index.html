@@ -143,6 +143,76 @@
     color:var(--amber); opacity:1; transform:scale(1.2);
   }
 
+  /* ----- Indicator buttons (Left & Right) ----- */
+  .indicator-btn{
+    position:absolute;
+    width:46px; height:46px;
+    border-radius:50%;
+    background:rgba(15, 18, 22, 0.75);
+    border:1.5px solid var(--line);
+    display:flex; align-items:center; justify-content:center;
+    z-index:10; cursor:pointer; touch-action:none;
+    user-select:none; -webkit-user-select:none;
+    box-shadow:0 3px 10px rgba(0,0,0,0.5), inset 0 0 4px rgba(0,0,0,0.4);
+    backdrop-filter:blur(4px); -webkit-backdrop-filter:blur(4px);
+    transition:transform .08s ease, border-color .15s ease, box-shadow .15s ease;
+    padding:0; appearance:none; -webkit-appearance:none; outline:none;
+  }
+  .indicator-btn:active{
+    transform:scale(0.92);
+  }
+  #left-indicator-btn{
+    top:-5px; left:6px;
+  }
+  #right-indicator-btn{
+    top:-5px; right:6px;
+  }
+  .indicator-arrow{
+    width:22px; height:22px;
+    display:block;
+  }
+  .indicator-arrow path{
+    fill:transparent;
+    stroke:var(--text-1);
+    stroke-width:1.9;
+    stroke-linejoin:round;
+    stroke-linecap:round;
+    transition:fill .1s ease, stroke .1s ease, filter .1s ease;
+  }
+
+  @keyframes indicator-arrow-blink {
+    0%, 49% {
+      fill: var(--green);
+      stroke: var(--green-glow);
+      filter: drop-shadow(0 0 6px var(--green-glow));
+    }
+    50%, 100% {
+      fill: transparent;
+      stroke: var(--text-1);
+      filter: none;
+    }
+  }
+
+  @keyframes indicator-btn-blink {
+    0%, 49% {
+      border-color: rgba(54, 224, 138, 0.8);
+      box-shadow: 0 0 14px rgba(54, 224, 138, 0.5), inset 0 0 6px rgba(31, 174, 92, 0.3);
+      background: rgba(31, 174, 92, 0.15);
+    }
+    50%, 100% {
+      border-color: var(--line);
+      box-shadow: 0 3px 10px rgba(0,0,0,0.5), inset 0 0 4px rgba(0,0,0,0.4);
+      background: rgba(15, 18, 22, 0.75);
+    }
+  }
+
+  .indicator-btn.blinking {
+    animation: indicator-btn-blink 0.75s infinite;
+  }
+  .indicator-btn.blinking .indicator-arrow path {
+    animation: indicator-arrow-blink 0.75s infinite;
+  }
+
   /* ----- Pedal zone: custom buttons on top, pedals below ----- */
   #pedal-zone{ flex:1 1 auto; display:flex; flex-direction:column; min-height:0; }
 
@@ -425,6 +495,16 @@
             </svg>
           </div>
         </div>
+        <button type="button" id="left-indicator-btn" class="indicator-btn" aria-label="Left Indicator" title="Left Indicator (9)">
+          <svg class="indicator-arrow" viewBox="0 0 24 24">
+            <path d="M 13 5 L 4 12 L 13 19 L 13 15.5 L 20 15.5 L 20 8.5 L 13 8.5 Z" />
+          </svg>
+        </button>
+        <button type="button" id="right-indicator-btn" class="indicator-btn" aria-label="Right Indicator" title="Right Indicator (0)">
+          <svg class="indicator-arrow" viewBox="0 0 24 24">
+            <path d="M 11 5 L 20 12 L 11 19 L 11 15.5 L 4 15.5 L 4 8.5 L 11 8.5 Z" />
+          </svg>
+        </button>
       </div>
     </div>
 
@@ -581,6 +661,8 @@
     brake: 0,
     clutch: 0,
     horn: false,          // horn button state (mapped to "H" key)
+    leftIndicator: false,  // left indicator state (mapped to "9" key or Button 10)
+    rightIndicator: false, // right indicator state (mapped to "0" key or Button 11)
     throttleMode: 'click', // 'click' or 'slide'
     brakeMode: 'click',
     clutchMode: 'click',
@@ -626,6 +708,8 @@
   const $ = (id) => document.getElementById(id);
   const wheelRim   = $("wheel-rim");
   const hornBtn    = $("horn-btn");
+  const leftIndBtn  = $("left-indicator-btn");
+  const rightIndBtn = $("right-indicator-btn");
   const telemetry  = $("telemetry");
   const led        = $("led");
   const statusText = $("status-text");
@@ -832,12 +916,72 @@
     }
   });
 
-  window.addEventListener("keydown", (e)=>{
-    if(e.key && e.key.toLowerCase() === "h" && !e.repeat){
-      const tag = document.activeElement ? document.activeElement.tagName : "";
-      if(tag !== "INPUT" && tag !== "TEXTAREA"){
-        pressHorn(e);
+  /* ====================================================
+     INDICATOR BUTTONS — Top-left and Top-right of wheel
+     Mapped to "9" and "0" keys, or Buttons 10 and 11 in Forza mode.
+     Blinks continuously when active until pressed again.
+     ==================================================== */
+  const FORZA_LEFT_IND_BTN = 10;
+  const FORZA_RIGHT_IND_BTN = 11;
+
+  function toggleIndicator(dir){
+    if(dir === "left"){
+      state.leftIndicator = !state.leftIndicator;
+      leftIndBtn.classList.toggle("blinking", state.leftIndicator);
+      if(state.forzaMode){
+        state.forzaButtons[FORZA_LEFT_IND_BTN] = state.leftIndicator;
       }
+    } else if(dir === "right"){
+      state.rightIndicator = !state.rightIndicator;
+      rightIndBtn.classList.toggle("blinking", state.rightIndicator);
+      if(state.forzaMode){
+        state.forzaButtons[FORZA_RIGHT_IND_BTN] = state.rightIndicator;
+      }
+    }
+    vibrate(15);
+    sendState();
+  }
+
+  function stopIndicators(){
+    let changed = false;
+    if(state.leftIndicator){
+      state.leftIndicator = false;
+      leftIndBtn.classList.remove("blinking");
+      if(state.forzaMode) state.forzaButtons[FORZA_LEFT_IND_BTN] = false;
+      changed = true;
+    }
+    if(state.rightIndicator){
+      state.rightIndicator = false;
+      rightIndBtn.classList.remove("blinking");
+      if(state.forzaMode) state.forzaButtons[FORZA_RIGHT_IND_BTN] = false;
+      changed = true;
+    }
+    if(changed) sendState();
+  }
+
+  leftIndBtn.addEventListener("pointerdown", (e)=>{
+    toggleIndicator("left");
+    e.stopPropagation();
+    e.preventDefault();
+  });
+  rightIndBtn.addEventListener("pointerdown", (e)=>{
+    toggleIndicator("right");
+    e.stopPropagation();
+    e.preventDefault();
+  });
+  leftIndBtn.addEventListener("pointerup", (e)=>{ e.stopPropagation(); });
+  rightIndBtn.addEventListener("pointerup", (e)=>{ e.stopPropagation(); });
+
+  window.addEventListener("keydown", (e)=>{
+    if(!e.key || e.repeat) return;
+    const tag = document.activeElement ? document.activeElement.tagName : "";
+    if(tag === "INPUT" || tag === "TEXTAREA") return;
+    if(e.key.toLowerCase() === "h"){
+      pressHorn(e);
+    } else if(e.key === "9"){
+      toggleIndicator("left");
+    } else if(e.key === "0"){
+      toggleIndicator("right");
     }
   });
   window.addEventListener("keyup", (e)=>{
@@ -1200,6 +1344,8 @@
       state.customButtons.forEach(cfg=>{ if(cfg.key) customKeys[cfg.key] = !!cfg.pressed; });
       if(!state.forzaMode){
         customKeys["h"] = !!customKeys["h"] || !!state.horn;
+        customKeys["9"] = !!state.leftIndicator;
+        customKeys["0"] = !!state.rightIndicator;
       }
       const payload = {
         Normalized_Steering: Math.round((state.normalized||0)*1000)/1000,
@@ -1210,7 +1356,9 @@
         Brake_State: !!state.brake,
         Clutch_State: !!state.clutch,
         Custom_Keys: customKeys,
-        Horn_State: !state.forzaMode && !!state.horn
+        Horn_State: !state.forzaMode && !!state.horn,
+        Left_Indicator_State: !state.forzaMode && !!state.leftIndicator,
+        Right_Indicator_State: !state.forzaMode && !!state.rightIndicator
       };
       if(state.forzaMode){
         payload.Handbrake_Value = state.handbrake || 0.0;
@@ -1586,10 +1734,14 @@
     if(!state.forzaMode){
       state.handbrake = 0.0;
       state.forzaButtons = {};
-    } else if(state.horn){
-      state.forzaButtons[FORZA_HORN_BTN] = true;
+    } else {
+      if(state.horn) state.forzaButtons[FORZA_HORN_BTN] = true;
+      if(state.leftIndicator) state.forzaButtons[FORZA_LEFT_IND_BTN] = true;
+      if(state.rightIndicator) state.forzaButtons[FORZA_RIGHT_IND_BTN] = true;
     }
     if(hornBtn) hornBtn.title = state.forzaMode ? "Horn (Button 9)" : "Horn (H)";
+    if(leftIndBtn) leftIndBtn.title = state.forzaMode ? "Left Indicator (Button 10)" : "Left Indicator (9)";
+    if(rightIndBtn) rightIndBtn.title = state.forzaMode ? "Right Indicator (Button 11)" : "Right Indicator (0)";
     renderAllCustomButtons();
     try{ localStorage.setItem("kyberlink_forza_mode", state.forzaMode ? "1" : "0"); }catch(e){}
     if(fromTap) vibrate(30);
@@ -1645,11 +1797,13 @@
     if(document.hidden){
       haptics.silence();
       if(state.horn) releaseHorn();
+      stopIndicators();
     }
   });
   window.addEventListener("pagehide", ()=>{
     haptics.silence();
     if(state.horn) releaseHorn();
+    stopIndicators();
   });
 
   /* ====================================================

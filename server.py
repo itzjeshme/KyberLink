@@ -8,7 +8,8 @@ What this does
 2. Runs a WebSocket server receiving the phone's 60Hz JSON stream:
        { "Normalized_Steering": -1.0..1.0, "Throttle_State": bool,
          "Brake_State": bool, "Custom_Keys": {"<key name>": bool, ...},
-         "Horn_State": bool }
+         "Horn_State": bool, "Left_Indicator_State": bool,
+         "Right_Indicator_State": bool }
 3. Feeds a vJoy virtual joystick, which Windows and KyberLink see as a
    real DirectInput controller:
        - Steering     -> vJoy X axis  (absolute position, no mouse involved)
@@ -1348,6 +1349,20 @@ async def handle_client(websocket):
                     custom_keys["h"] = True
                 elif "h" not in custom_keys and controller.custom_key_states.get("h", False):
                     custom_keys["h"] = False
+
+            left_ind_state = data.get("Left_Indicator_State")
+            if left_ind_state is not None and not controller.forza_mode:
+                if left_ind_state:
+                    custom_keys["9"] = True
+                elif "9" not in custom_keys and controller.custom_key_states.get("9", False):
+                    custom_keys["9"] = False
+
+            right_ind_state = data.get("Right_Indicator_State")
+            if right_ind_state is not None and not controller.forza_mode:
+                if right_ind_state:
+                    custom_keys["0"] = True
+                elif "0" not in custom_keys and controller.custom_key_states.get("0", False):
+                    custom_keys["0"] = False
 
             controller.steering = steer
             controller.throttle = float(data.get("Throttle_Value", 1.0 if data.get("Throttle_State", False) else 0.0))
