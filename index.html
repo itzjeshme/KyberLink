@@ -115,12 +115,33 @@
     z-index:5;
   }
   #wheel-rim{ transform-origin:50% 50%; will-change:transform; touch-action:none; }
-  #hub-readout{
+  #horn-btn{
     position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);
-    display:flex; flex-direction:column; align-items:center; pointer-events:none;
+    width:22.5%; height:22.5%; border-radius:50%;
+    background:rgba(15, 18, 22, 0.12);
+    border:1.5px solid rgba(255, 106, 0, 0.4);
+    display:flex; flex-direction:column; align-items:center; justify-content:flex-end;
+    padding-bottom:6px; box-sizing:border-box;
+    z-index:10; cursor:pointer; touch-action:none;
+    user-select:none; -webkit-user-select:none;
+    box-shadow:inset 0 0 6px rgba(0,0,0,0.35);
+    transition:transform .08s ease, border-color .12s ease, box-shadow .12s ease, background .12s ease;
   }
-  #hub-angle{ font-family:var(--mono); font-size:22px; font-weight:700; color:var(--text-0); letter-spacing:.02em; }
-  #hub-turns{ font-family:var(--mono); font-size:10px; color:var(--text-1); margin-top:2px; letter-spacing:.05em; }
+  #horn-btn .horn-icon{
+    color:var(--text-1); opacity:0.8; display:flex; align-items:center; justify-content:center;
+    transition:color .12s, opacity .12s, transform .12s;
+  }
+  #horn-btn .horn-icon svg{ display:block; width:12px; height:12px; filter:drop-shadow(0 1px 2px rgba(0,0,0,0.9)); }
+
+  #horn-btn:active, #horn-btn.active{
+    transform:translate(-50%,-50%) scale(0.94);
+    border-color:var(--amber);
+    background:radial-gradient(circle, rgba(255,106,0,0.4) 0%, rgba(255,106,0,0.08) 100%);
+    box-shadow:0 0 16px rgba(255,106,0,0.6), inset 0 0 10px rgba(255,106,0,0.3);
+  }
+  #horn-btn.active .horn-icon{
+    color:var(--amber); opacity:1; transform:scale(1.2);
+  }
 
   /* ----- Pedal zone: custom buttons on top, pedals below ----- */
   #pedal-zone{ flex:1 1 auto; display:flex; flex-direction:column; min-height:0; }
@@ -346,7 +367,7 @@
       <div id="led"></div>
       <span id="status-text">offline</span>
     </div>
-    <div id="telemetry">0.00</div>
+    <div id="telemetry">0.00 (0 / 450) degrees</div>
     <div id="status-right">
       <div id="forza-nav-group" class="hidden">
         <button id="forza-map-btn" class="forza-nav-btn" title="Map">MAP</button>
@@ -396,9 +417,13 @@
 
           <g id="ticks"></g>
         </svg>
-        <div id="hub-readout">
-          <div id="hub-angle">0°</div>
-          <div id="hub-turns">0.00 TURNS</div>
+        <div id="horn-btn" class="horn-btn" role="button" aria-label="Horn" title="Horn (H)">
+          <div class="horn-icon">
+            <svg viewBox="0 0 24 24" fill="currentColor">
+              <path d="M3 10v4c0 .55.45 1 1 1h3l4 3.5V5.5L7 9H4c-.55 0-1 .45-1 1z"/>
+              <path d="M14.5 8.5c1 1 1.5 2.2 1.5 3.5s-.5 2.5-1.5 3.5M17.5 6c1.8 1.8 2.5 3.8 2.5 6s-.7 4.2-2.5 6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+            </svg>
+          </div>
         </div>
       </div>
     </div>
@@ -555,6 +580,7 @@
     throttle: 0,
     brake: 0,
     clutch: 0,
+    horn: false,          // horn button state (mapped to "H" key)
     throttleMode: 'click', // 'click' or 'slide'
     brakeMode: 'click',
     clutchMode: 'click',
@@ -599,8 +625,7 @@
   /* ---------------- dom refs ---------------- */
   const $ = (id) => document.getElementById(id);
   const wheelRim   = $("wheel-rim");
-  const hubAngle   = $("hub-angle");
-  const hubTurns   = $("hub-turns");
+  const hornBtn    = $("horn-btn");
   const telemetry  = $("telemetry");
   const led        = $("led");
   const statusText = $("status-text");
@@ -671,10 +696,9 @@
 
   function updateWheelVisual(){
     wheelRim.style.transform = `rotate(${state.rotation}deg)`;
-    hubAngle.textContent = `${Math.round(state.rotation)}°`;
-    hubTurns.textContent = `${(state.rotation/360).toFixed(2)} TURNS`;
     const normalized = state.rotation / state.halfRange;
-    telemetry.textContent = normalized.toFixed(2);
+    const curDeg = Math.round(state.rotation) || 0;
+    telemetry.textContent = `${normalized.toFixed(2)} (${curDeg} / ${state.halfRange}) degrees`;
     state.normalized = clamp(normalized, -1, 1);
   }
 
@@ -696,13 +720,20 @@
 
   wheelRim.addEventListener("pointerdown", (e)=>{
     if(state.dragging) return;
+    const rect = wheelRim.getBoundingClientRect();
+    const cx = rect.left + rect.width/2;
+    const cy = rect.top + rect.height/2;
+    const dist = Math.hypot(e.clientX - cx, e.clientY - cy);
+    if(dist < (rect.width / 2) * 0.23){
+      pressHorn(e);
+      return;
+    }
     state.dragging = true;
     state.pointerId = e.pointerId;
     try{ wheelRim.setPointerCapture(e.pointerId); }catch(err){}
     cancelReturn();
-    const rect = wheelRim.getBoundingClientRect();
-    state.centerX = rect.left + rect.width/2;
-    state.centerY = rect.top + rect.height/2;
+    state.centerX = cx;
+    state.centerY = cy;
     state.lastPointerAngle = angleFromCenter(e.clientX, e.clientY);
     if(state.ffbMode){ phys.grip = true; phys.target = state.rotation; }   // FFB: you hold the wheel, you don't set its angle
     e.preventDefault();
@@ -724,6 +755,10 @@
   });
 
   function endDrag(e){
+    if(hornPid !== null && e.pointerId === hornPid){
+      releaseHorn(e);
+      return;
+    }
     if(!state.dragging || e.pointerId !== state.pointerId) return;
     state.dragging = false;
     state.pointerId = null;
@@ -732,7 +767,11 @@
   }
   wheelRim.addEventListener("pointerup", endDrag);
   wheelRim.addEventListener("pointercancel", endDrag);
-  wheelRim.addEventListener("lostpointercapture", ()=>{
+  wheelRim.addEventListener("lostpointercapture", (e)=>{
+    if(hornPid !== null && e.pointerId === hornPid){
+      releaseHorn(e);
+      return;
+    }
     if(state.dragging){
       state.dragging = false; state.pointerId = null;
       if(state.ffbMode) phys.grip = false; else animateReturnToCenter();
@@ -745,6 +784,70 @@
     state.rotation = clamp(state.rotation, -state.halfRange, state.halfRange);
     updateWheelVisual();
   }
+
+  /* ====================================================
+     HORN BUTTON — center of the wheel, mapped to "H" key
+     ==================================================== */
+  let hornPid = null;
+
+  function pressHorn(e){
+    if(hornPid !== null) return;
+    hornPid = e ? e.pointerId : "horn";
+    if(e && e.pointerId !== undefined && hornBtn.setPointerCapture){
+      try{ hornBtn.setPointerCapture(e.pointerId); }catch(err){}
+    }
+    state.horn = true;
+    if(state.forzaMode){
+      state.forzaButtons[FORZA_HORN_BTN] = true;
+    }
+    hornBtn.classList.add("active");
+    vibrate(15);
+    sendState();
+    if(e && e.preventDefault) e.preventDefault();
+  }
+
+  function releaseHorn(e){
+    if(e && e.pointerId !== undefined && hornPid !== null && e.pointerId !== hornPid) return;
+    hornPid = null;
+    state.horn = false;
+    if(state.forzaMode){
+      state.forzaButtons[FORZA_HORN_BTN] = false;
+    }
+    hornBtn.classList.remove("active");
+    sendState();
+  }
+
+  hornBtn.addEventListener("pointerdown", (e)=>{
+    pressHorn(e);
+    e.stopPropagation();
+  });
+  hornBtn.addEventListener("pointerup", (e)=>{
+    releaseHorn(e);
+    e.stopPropagation();
+  });
+  hornBtn.addEventListener("pointercancel", releaseHorn);
+  hornBtn.addEventListener("lostpointercapture", (e)=>{
+    if(hornPid !== null){
+      releaseHorn(e);
+    }
+  });
+
+  window.addEventListener("keydown", (e)=>{
+    if(e.key && e.key.toLowerCase() === "h" && !e.repeat){
+      const tag = document.activeElement ? document.activeElement.tagName : "";
+      if(tag !== "INPUT" && tag !== "TEXTAREA"){
+        pressHorn(e);
+      }
+    }
+  });
+  window.addEventListener("keyup", (e)=>{
+    if(e.key && e.key.toLowerCase() === "h"){
+      const tag = document.activeElement ? document.activeElement.tagName : "";
+      if(tag !== "INPUT" && tag !== "TEXTAREA"){
+        releaseHorn(e);
+      }
+    }
+  });
 
   /* ====================================================
      PEDALS — boolean hold buttons, pointer-capture based
@@ -875,6 +978,7 @@
      In Forza mode, these automatically map to Forza's
      GameInput functions (Gear Up/Down, Handbrake, A, B, X).
      ==================================================== */
+  const FORZA_HORN_BTN = 9;
   const FORZA_PRESET_BUTTONS = [
     { label: "CANCEL",    glyph: "[XBOX B]", vjoyBtn: 4 },
     { label: "BUTTON 8",  glyph: "[BTN 8]",  vjoyBtn: 8 },
@@ -1094,6 +1198,9 @@
     if(state.ws && state.ws.readyState === WebSocket.OPEN){
       const customKeys = {};
       state.customButtons.forEach(cfg=>{ if(cfg.key) customKeys[cfg.key] = !!cfg.pressed; });
+      if(!state.forzaMode){
+        customKeys["h"] = !!customKeys["h"] || !!state.horn;
+      }
       const payload = {
         Normalized_Steering: Math.round((state.normalized||0)*1000)/1000,
         Throttle_Value: state.throttle,
@@ -1102,7 +1209,8 @@
         Throttle_State: !!state.throttle,
         Brake_State: !!state.brake,
         Clutch_State: !!state.clutch,
-        Custom_Keys: customKeys
+        Custom_Keys: customKeys,
+        Horn_State: !state.forzaMode && !!state.horn
       };
       if(state.forzaMode){
         payload.Handbrake_Value = state.handbrake || 0.0;
@@ -1478,7 +1586,10 @@
     if(!state.forzaMode){
       state.handbrake = 0.0;
       state.forzaButtons = {};
+    } else if(state.horn){
+      state.forzaButtons[FORZA_HORN_BTN] = true;
     }
+    if(hornBtn) hornBtn.title = state.forzaMode ? "Horn (Button 9)" : "Horn (H)";
     renderAllCustomButtons();
     try{ localStorage.setItem("kyberlink_forza_mode", state.forzaMode ? "1" : "0"); }catch(e){}
     if(fromTap) vibrate(30);
@@ -1530,8 +1641,16 @@
   });
   ffbSlider.addEventListener("change", ()=> haptics.preview(Math.pow(clamp(0.5 * state.ffbStrength, 0, 1), FFB_CURVE), 600));   // what a 50% shake feels like at this strength
 
-  document.addEventListener("visibilitychange", ()=>{ if(document.hidden) haptics.silence(); });
-  window.addEventListener("pagehide", ()=> haptics.silence());
+  document.addEventListener("visibilitychange", ()=>{
+    if(document.hidden){
+      haptics.silence();
+      if(state.horn) releaseHorn();
+    }
+  });
+  window.addEventListener("pagehide", ()=>{
+    haptics.silence();
+    if(state.horn) releaseHorn();
+  });
 
   /* ====================================================
      SETTINGS DRAWER

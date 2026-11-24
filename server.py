@@ -7,7 +7,8 @@ What this does
 1. Serves the mobile web app (index.html) over plain HTTP.
 2. Runs a WebSocket server receiving the phone's 60Hz JSON stream:
        { "Normalized_Steering": -1.0..1.0, "Throttle_State": bool,
-         "Brake_State": bool, "Custom_Keys": {"<key name>": bool, ...} }
+         "Brake_State": bool, "Custom_Keys": {"<key name>": bool, ...},
+         "Horn_State": bool }
 3. Feeds a vJoy virtual joystick, which Windows and KyberLink see as a
    real DirectInput controller:
        - Steering     -> vJoy X axis  (absolute position, no mouse involved)
@@ -1328,6 +1329,10 @@ async def handle_client(websocket):
                     if wanted_forza != controller.forza_mode:
                         controller.forza_mode = wanted_forza
                         print(f"\n[FORZA] Forza mode {'ENABLED' if wanted_forza else 'DISABLED'}")
+                        if controller.forza_mode:
+                            release_all_keys()
+                        else:
+                            release_all_forza_buttons()
                     if "ffb_effects" in data and isinstance(data["ffb_effects"], dict):
                         controller.ffb_effects = {str(k): bool(v) for k, v in data["ffb_effects"].items()}
                 continue
@@ -1336,6 +1341,13 @@ async def handle_client(websocket):
             custom_keys = data.get("Custom_Keys", {})
             if not isinstance(custom_keys, dict):
                 custom_keys = {}
+
+            horn_state = data.get("Horn_State")
+            if horn_state is not None and not controller.forza_mode:
+                if horn_state:
+                    custom_keys["h"] = True
+                elif "h" not in custom_keys and controller.custom_key_states.get("h", False):
+                    custom_keys["h"] = False
 
             controller.steering = steer
             controller.throttle = float(data.get("Throttle_Value", 1.0 if data.get("Throttle_State", False) else 0.0))
@@ -1357,11 +1369,13 @@ async def handle_client(websocket):
             else:
                 status = f" PAUSED — press {PAUSE_HOTKEY_NAME} to engage"
 
+            active_keys = ",".join(k.upper() for k, v in custom_keys.items() if v) or "-"
             if controller.forza_mode:
                 active_forza = ",".join(f"B{k}" for k, v in controller.forza_buttons.items() if v) or "-"
                 btn_display = f"FORZA [{active_forza}]"
+                if active_keys != "-":
+                    btn_display += f" KEYS [{active_keys}]"
             else:
-                active_keys = ",".join(k for k, v in custom_keys.items() if v) or "-"
                 btn_display = f"KEYS [{active_keys}]"
             ffb_text = controller.ffb_text if controller.ffb_enabled else ""
             print(
